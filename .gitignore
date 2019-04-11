@@ -1,0 +1,12 @@
+*.txt
+*.zip
+*.bak
+*.pyc
+*.pickle
+*.tfevents*
+*ckpt-*
+checkpoint
+graph.pbtxt
+*.csv
+*.ods
+*.profile
