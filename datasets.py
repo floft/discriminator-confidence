@@ -40,16 +40,72 @@ flags.DEFINE_integer("eval_max_examples", 0, "Max number of examples to evaluate
 
 
 class Dataset:
-    """ Base class for datasets """
-    def __init__(self, train_batch=None, eval_batch=None, shuffle_buffer=None,
-            prefetch_buffer=None, eval_shuffle_seed=None, eval_max_examples=None):
+    """
+    Base class for datasets
+
+    class Something(Dataset):
+        def __init__(self, *args, **kwargs):
+            num_classes = 2
+            class_labels = ["class1", "class2"]
+            super().__init__(num_classes, class_labels, *args, **kwargs)
+
+        def process(self, data, labels):
+            ...
+            return super().process(data, labels)
+
+        def load(self):
+            ...
+            return train_images, train_labels, test_images, test_labels
+
+    Also, add to the datasets={"something": Something, ...} dictionary below.
+    """
+    def __init__(self, num_classes, class_labels, train_batch=None,
+            eval_batch=None, shuffle_buffer=None, prefetch_buffer=None,
+            eval_shuffle_seed=None, eval_max_examples=None,
+            resize=None, pad_to=None, pad_const=0,
+            convert_to_gray=False, convert_to_rgb=False):
+        """
+        Initialize dataset
+
+        Must specify num_classes and class_labels (the names of the classes).
+        Resize and pad_to should be a list of the 2D size (width, height) of
+        the desired output tensor dimensions (excluding batch size and number
+        of channels). Pad_const is the value to pad with. Resize is done before
+        padding. Convert gray/rgb if true will convert to 1 or 3 channels
+        respectively. Other arguments if None are defaults from command line
+        flags.
+
+        For example,
+            Dataset(num_classes=2, class_labels=["class1", "class2"],
+                resize=[28,28], pad=[32,32], pad_const=-1, convert_to_gray=True)
+
+        This calls load() to get the data, process() to normalize, convert to
+        float, etc., and then load_dataset() to create the tf.data.Dataset's.
+        """
+        # Sanity checks
+        assert num_classes == len(class_labels), \
+            "num_classes != len(class_labels)"
+        assert resize is None or len(resize) == 2, \
+            "Incorrect format for resize: resize=[width,height]"
+        assert pad_to is None or len(pad_to) == 2, \
+            "Incorrect format for pad: pad=[width,height]"
+        assert not (convert_to_gray and convert_to_rgb), \
+            "Cannot convert to both gray and rgb, only one or the other"
+
         # Set parameters
+        self.num_classes = num_classes
+        self.class_labels = class_labels
         self.train_batch = train_batch
         self.eval_batch = eval_batch
         self.shuffle_buffer = shuffle_buffer
         self.prefetch_buffer = prefetch_buffer
         self.eval_shuffle_seed = eval_shuffle_seed
         self.eval_max_examples = eval_max_examples
+        self.resize = resize
+        self.pad_to = pad_to
+        self.pad_const = pad_const
+        self.convert_to_gray = convert_to_gray
+        self.convert_to_rgb = convert_to_rgb
 
         # Set defaults if not specified
         if self.train_batch is None:
@@ -66,8 +122,9 @@ class Dataset:
             self.eval_max_examples = FLAGS.eval_max_examples
 
         # Load the dataset
-        self.train_images, self.train_labels, \
-            self.test_images, self.test_labels = self.load()
+        train_images, train_labels, test_images, test_labels = self.load()
+        self.train_images, self.train_labels = self.process(train_images, train_labels)
+        self.test_images, self.test_labels = self.process(test_images, test_labels)
         self.train, self.train_evaluation, self.test_evaluation = \
             self.load_dataset(self.train_images, self.train_labels,
             self.test_images, self.test_labels)
@@ -118,6 +175,39 @@ class Dataset:
             self.eval_batch, evaluation=True)
         return train_dataset, eval_train_dataset, eval_test_dataset
 
+    def calculate_padding(self, input_size, desired_output_size):
+        """ Calculate before/after padding to nearly center it, if odd then
+        one more pixel of padding after rather than before """
+        pad_needed = max(0, desired_output_size - input_size)
+        pad_before = pad_needed // 2
+        pad_after = pad_needed - pad_before
+        return pad_before, pad_after
+
+    def process(self, data, labels):
+        """ Perform desired resize, padding, conversions, etc. If you override,
+        you should `return super().process(data, labels)` to make sure these
+        options are handled. """
+        if self.resize is not None:
+            # Default interpolation is bilinear
+            data = tf.image.resize(data, self.resize)
+
+        if self.pad_to is not None:
+            # data.shape = [batch_size, height, width, channels]
+            # self.pad = [desired_width, desired_height]
+            padding = [(0, 0),
+                self.calculate_padding(data.shape[1], self.pad_to[1]),
+                self.calculate_padding(data.shape[2], self.pad_to[0]),
+                (0, 0)]
+            data = tf.pad(data, padding, constant_values=self.pad_const)
+
+        if self.convert_to_gray:
+            # https://en.wikipedia.org/wiki/Luma_%28video%29
+            data = tf.image.rgb_to_grayscale(data)
+        elif self.convert_to_rgb:
+            data = tf.image.grayscale_to_rgb(data)
+
+        return data, labels
+
     def one_hot(self, y, index_one=False):
         """ One-hot encode y if not already 2D """
         squeezed = np.squeeze(y)
@@ -145,31 +235,29 @@ class Dataset:
 class MNIST(Dataset):
     """ Load the MNIST dataset """
     def __init__(self, *args, **kwargs):
-        self.num_classes = 10
-        self.class_labels = [str(x) for x in range(10)]
-        super().__init__(*args, **kwargs)
+        num_classes = 10
+        class_labels = [str(x) for x in range(10)]
+        super().__init__(num_classes, class_labels, *args, **kwargs)
 
     def process(self, data, labels):
         """ Reshape, convert to float, normalize to [-1,1] """
         data = data.reshape(data.shape[0], 28, 28, 1).astype("float32")
         data = (data - 127.5) / 127.5
         labels = self.one_hot(labels)
-        return data, labels
+        return super().process(data, labels)
 
     def load(self):
         (train_images, train_labels), (test_images, test_labels) = \
             tf.keras.datasets.mnist.load_data()
-        train_images, train_labels = self.process(train_images, train_labels)
-        test_images, test_labels = self.process(test_images, test_labels)
         return train_images, train_labels, test_images, test_labels
 
 
 class SVHN(Dataset):
     """ Load the SVHN (cropped) dataset """
     def __init__(self, *args, **kwargs):
-        self.num_classes = 10
-        self.class_labels = [str(x) for x in range(10)]
-        super().__init__(*args, **kwargs)
+        num_classes = 10
+        class_labels = [str(x) for x in range(10)]
+        super().__init__(num_classes, class_labels, *args, **kwargs)
 
     def download(self):
         """ Download the SVHN files from online """
@@ -183,30 +271,29 @@ class SVHN(Dataset):
         data = data.reshape(data.shape[0], 32, 32, 3).astype("float32")
         data = (data - 127.5) / 127.5
         labels = self.one_hot(labels)
-        return data, labels
+        return super().process(data, labels)
 
     def load_file(self, filename):
         """ Load from .mat file """
         data = scipy.io.loadmat(filename)
         images = data["X"].transpose([3, 0, 1, 2])
         labels = data["y"].reshape([-1])
+        labels[labels == 10] = 0  # 1 = "1", 2 = "2", ... but 10 = "0"
         return images, labels
 
     def load(self):
         train_fp, test_fp = self.download()
         train_images, train_labels = self.load_file(train_fp)
         test_images, test_labels = self.load_file(test_fp)
-        train_images, train_labels = self.process(train_images, train_labels)
-        test_images, test_labels = self.process(test_images, test_labels)
         return train_images, train_labels, test_images, test_labels
 
 
 class USPS(Dataset):
     """ Load the USPS dataset """
     def __init__(self, *args, **kwargs):
-        self.num_classes = 10
-        self.class_labels = [str(x) for x in range(10)]
-        super().__init__(*args, **kwargs)
+        num_classes = 10
+        class_labels = [str(x) for x in range(10)]
+        super().__init__(num_classes, class_labels, *args, **kwargs)
 
     def download(self):
         """ Download the USPS files from online """
@@ -251,14 +338,12 @@ class USPS(Dataset):
         """ Reshape (already normalized to [-1,1], should already be float) """
         data = data.reshape(data.shape[0], 16, 16, 1).astype("float32")
         labels = self.one_hot(labels)
-        return data, labels
+        return super().process(data, labels)
 
     def load(self):
         train_fp, test_fp = self.download()
         train_images, train_labels = self.load_file(train_fp)
         test_images, test_labels = self.load_file(test_fp)
-        train_images, train_labels = self.process(train_images, train_labels)
-        test_images, test_labels = self.process(test_images, test_labels)
         return train_images, train_labels, test_images, test_labels
 
 
@@ -277,6 +362,39 @@ def load(name, *args, **kwargs):
     return datasets[name](*args, **kwargs)
 
 
+def load_da(source_name, target_name, *args, **kwargs):
+    """ Load two datasets (source and target) but perform necessary conversions
+    to make them compatable for adaptation (i.e. same size, channels, etc.).
+    Names must be in datasets.names()."""
+    # MNIST <-> USPS: "The USPS images were up-scaled using bilinear interpolation from
+    # 16×16 to 28×28 resolution to match that of MNIST."
+    if source_name == "mnist" and target_name == "usps":
+        source_dataset = load(source_name, *args, **kwargs)
+        target_dataset = load(target_name, *args, resize=[28, 28], **kwargs)
+    elif target_name == "mnist" and source_name == "usps":
+        source_dataset = load(source_name, *args, resize=[28, 28], **kwargs)
+        target_dataset = load(target_name, *args, **kwargs)
+
+    # MNIST <-> SVHN: "The MNIST images were padded to 32×32 resolution and converted
+    # to RGB by replicating the greyscale channel into the three RGB channels
+    # to match the format of SVHN."
+    elif source_name == "mnist" and target_name == "svhn":
+        source_dataset = load(source_name, *args, pad_to=[32, 32], pad_const=-1,
+            convert_to_rgb=True, **kwargs)
+        target_dataset = load(target_name, *args, **kwargs)
+    elif target_name == "mnist" and source_name == "svhn":
+        source_dataset = load(source_name, *args, **kwargs)
+        target_dataset = load(target_name, *args, pad_to=[32, 32], pad_const=-1,
+            convert_to_rgb=True, **kwargs)
+
+    # No conversions, resizes, etc.
+    else:
+        source_dataset = load(source_name, *args, **kwargs)
+        target_dataset = load(target_name, *args, **kwargs)
+
+    return source_dataset, target_dataset
+
+
 # Get names
 def names():
     """
@@ -287,6 +405,11 @@ def names():
 
 def main(argv):
     print("Available datasets:", names())
+
+    # Example showing that the sizes and number of channels are matched
+    source, target = load_da("mnist", "usps")
+    print("Source:", source.train)
+    print("Target:", target.train)
 
 
 if __name__ == "__main__":

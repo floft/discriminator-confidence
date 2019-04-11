@@ -162,27 +162,23 @@ def main(argv):
     #
     # Note: "It is worth noting that only the training sets of the small image
     # datasets were used during training; the test sets usedfor reporting scores
-    # only." -- so, only use *_test for evaluation.
-    # Note 2: "The USPS images were up-scaled using bilinear interpolation from
-    # 16×16 to 28×28 resolution to match that of MNIST."
-    # Note 3: "The MNIST images were padded to 32×32 resolution and converted
-    # to RGB by replicating the greyscale channel into the three RGB channels
-    # to match the format of SVHN."
-    source_dataset = datasets.load(FLAGS.source, train_batch=train_batch)
-    source_iter = iter(source_dataset.train)
-    source_dataset_eval = source_dataset.test_evaluation
-
-    target_dataset = None
-    target_iter = None
-    target_dataset_eval = None
-
+    # only." (self-ensembling) -- so, only use *_test for evaluation.
     if FLAGS.target != "":
-        target_dataset = datasets.load(FLAGS.target, train_batch=train_batch)
-        target_iter = iter(target_dataset.train)
-        target_dataset_eval = target_dataset.test_evaluation
-
+        source_dataset, target_dataset = datasets.load_da(FLAGS.source,
+            FLAGS.target, train_batch=train_batch)
         assert source_dataset.num_classes == target_dataset.num_classes, \
             "Adapting from source to target with different classes not supported"
+    else:
+        source_dataset = datasets.load(FLAGS.source, train_batch=train_batch)
+        target_dataset = None
+
+    # Iterator and evaluation datasets if we have the dataset
+    source_iter = iter(source_dataset.train)
+    source_dataset_eval = source_dataset.test_evaluation
+    target_iter = iter(target_dataset.train) \
+        if target_dataset is not None else None
+    target_dataset_eval = target_dataset.test_evaluation \
+        if target_dataset is not None else None
 
     # Information about domains
     num_domains = 2  # we'll always assume 2 domains
