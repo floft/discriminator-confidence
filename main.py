@@ -89,9 +89,9 @@ def train_step(data_a, data_b, model, opt, d_opt, global_step,
     if FLAGS.adapt:
         assert data_a is not None and data_b is not None, \
             "Adaptation requires both datasets A and B"
-        x = np.concatenate((x_a, x_b), axis=0)
-        task_y_true = np.concatenate((y_a, np.zeros(y_b.shape)), axis=0)
-        domain_y_true = np.concatenate((source_domain, target_domain), axis=0)
+        x = tf.concat((x_a, x_b), axis=0)
+        task_y_true = tf.concat((y_a, tf.zeros_like(y_b)), axis=0)
+        domain_y_true = tf.concat((source_domain, target_domain), axis=0)
     else:
         x = x_a
         task_y_true = y_a
