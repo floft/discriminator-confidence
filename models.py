@@ -35,34 +35,36 @@ flags.DEFINE_integer("resnet_layers", 2, "Number of layers within a single resne
 flags.register_validator("dropout", lambda v: v != 1, message="dropout cannot be 1")
 
 
-def make_flip_gradient():
-    """ Only create constant once """
-    zero = tf.constant(0, dtype=tf.float32)
-
     @tf.custom_gradient
     def flip_gradient(x, grl_lambda=1.0):
-        """ Forward pass identity, backward pass negate gradient and multiply by l """
+    """ Forward pass identity, backward pass negate gradient and multiply by  """
         grl_lambda = tf.cast(grl_lambda, dtype=tf.float32)
 
         def grad(dy):
-            # Fix the "Num gradients 2 generated for op name ... do not match num
-            # inputs 3" error. Though, we really don't care about the gradient of
-            # of grl_lambda.
-            return (tf.negative(dy) * grl_lambda, zero)
+        return tf.negative(dy) * grl_lambda * tf.ones_like(x)
 
         return x, grad
 
-    return flip_gradient
-
 
 class FlipGradient(tf.keras.layers.Layer):
-    """ Gradient reversal layer """
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.flip_gradient = make_flip_gradient()
+    """
+    Gradient reversal layer
 
-    def call(self, inputs, grl_lambda=1.0, training=None):
-        return self.flip_gradient(inputs, grl_lambda)
+    global_step = tf.Variable storing the current step
+    schedule = a function taking the global_step and computing the grl_lambda,
+        e.g. `lambda step: 1.0` or some more complex function.
+    """
+    def __init__(self, global_step, grl_schedule, **kwargs):
+        super().__init__(**kwargs)
+        self.global_step = global_step
+        self.grl_schedule = grl_schedule
+
+    def call(self, inputs, training=None):
+        """ Calculate grl_lambda first based on the current global step (a
+        variable) and then create the layer that does nothing except flip
+        the gradients """
+        grl_lambda = self.grl_schedule(self.global_step)
+        return flip_gradient(inputs, grl_lambda)
 
 
 class StopGradient(tf.keras.layers.Layer):
@@ -141,13 +143,15 @@ class Classifier(tf.keras.layers.Layer):
 
 class DomainClassifier(tf.keras.layers.Layer):
     """ Classifier() but flipping gradients """
-    def __init__(self, layers, units, dropout, num_domains, **kwargs):
+    def __init__(self, layers, units, dropout, num_domains,
+            global_step, grl_schedule,
+            make_classifier=Classifier, **kwargs):
         super().__init__(**kwargs)
-        self.flip_gradient = FlipGradient()
-        self.classifier = Classifier(layers, units, dropout, num_domains)
+        self.flip_gradient = FlipGradient(global_step, grl_schedule)
+        self.classifier = make_classifier(layers, units, dropout, num_domains)
 
-    def call(self, inputs, grl_lambda=1.0, training=None):
-        net = self.flip_gradient(inputs, grl_lambda=grl_lambda, training=training)
+    def call(self, inputs, training=None):
+        net = self.flip_gradient(inputs, training=training)
         net = self.classifier(net, training=training)
         return net
 
@@ -183,6 +187,13 @@ class FlatModel(tf.keras.layers.Layer):
         return self.bn(net, training=training)
 
 
+def DannGrlSchedule(num_steps):
+    """ GRL schedule from DANN paper """
+    def schedule(step):
+        return 2/(1+tf.exp(-10*(step/(num_steps+1))))-1
+    return schedule
+
+
 class DomainAdaptationModel(tf.keras.Model):
     """
     Contains custom model, feature extractor, task classifier, and domain
@@ -198,14 +209,17 @@ class DomainAdaptationModel(tf.keras.Model):
             task_y_pred, domain_y_pred = model(x, grl_lambda=1.0, training=True)
             ...
     """
-    def __init__(self, num_classes, num_domains, model_name, **kwargs):
+    def __init__(self, num_classes, num_domains, model_name, global_step,
+            num_steps, **kwargs):
         super().__init__(**kwargs)
+
+        grl_schedule = DannGrlSchedule(num_steps)
 
         self.feature_extractor = FeatureExtractor(FLAGS.layers, FLAGS.units, FLAGS.dropout)
         self.task_classifier = Classifier(FLAGS.task_layers, FLAGS.units,
             FLAGS.dropout, num_classes)
         self.domain_classifier = DomainClassifier(FLAGS.domain_layers, FLAGS.units,
-            FLAGS.dropout, num_domains)
+            FLAGS.dropout, num_domains, global_step, grl_schedule)
 
         if model_name == "flat":
             self.custom_model = FlatModel()
@@ -219,11 +233,11 @@ class DomainAdaptationModel(tf.keras.Model):
             + self.task_classifier.trainable_variables \
             + self.custom_model.trainable_variables
 
-    def call(self, inputs, grl_lambda=1.0, training=None):
+    def call(self, inputs, training=None):
         net = self.custom_model(inputs, training=training)
         net = self.feature_extractor(net, training=training)
         task = self.task_classifier(net, training=training)
-        domain = self.domain_classifier(net, grl_lambda=grl_lambda, training=training)
+        domain = self.domain_classifier(net, training=training)
         return task, domain
 
 

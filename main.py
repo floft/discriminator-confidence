@@ -75,8 +75,8 @@ def get_directory_names():
 
 
 @tf.function
-def train_step(data_a, data_b, model, opt, d_opt, global_step,
-        source_domain, target_domain, task_loss, domain_loss):
+def train_step(data_a, data_b, model, opt, d_opt, source_domain, target_domain,
+        task_loss, domain_loss):
     """ Compiled training step that we call many times """
     if data_a is not None:
         x_a, y_a = data_a
@@ -97,12 +97,9 @@ def train_step(data_a, data_b, model, opt, d_opt, global_step,
         task_y_true = y_a
         domain_y_true = source_domain
 
-    # GRL schedule from DANN paper
-    grl_lambda = 2/(1+tf.exp(-10*(global_step/(FLAGS.steps+1))))-1
-
     # Run data through model and compute loss
     with tf.GradientTape() as tape, tf.GradientTape() as d_tape:
-        task_y_pred, domain_y_pred = model(x, grl_lambda=grl_lambda, training=True)
+        task_y_pred, domain_y_pred = model(x, training=True)
 
         d_loss = domain_loss(domain_y_true, domain_y_pred)
         loss = task_loss(task_y_true, task_y_pred, training=True) + d_loss
@@ -196,7 +193,8 @@ def main(argv):
     global_step = tf.Variable(0, name="global_step", trainable=False)
 
     # Build our model
-    model = DomainAdaptationModel(num_classes, num_domains, FLAGS.model)
+    model = DomainAdaptationModel(num_classes, num_domains, FLAGS.model,
+        global_step, FLAGS.steps)
 
     # Optimizers
     opt = tf.keras.optimizers.Adam(FLAGS.lr)
@@ -220,7 +218,7 @@ def main(argv):
         data_b = next(target_iter) if target_iter is not None else None
 
         t = time.time()
-        train_step(data_a, data_b, model, opt, d_opt, global_step,
+        train_step(data_a, data_b, model, opt, d_opt,
             source_domain, target_domain, task_loss, domain_loss)
         global_step.assign_add(1)
         t = time.time() - t
