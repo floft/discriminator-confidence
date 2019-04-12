@@ -31,7 +31,7 @@ from absl import flags
 
 FLAGS = flags.FLAGS
 
-flags.DEFINE_integer("train_batch", 256, "Batch size for training")
+flags.DEFINE_integer("train_batch", 128, "Batch size for training")
 flags.DEFINE_integer("eval_batch", 16384, "Batch size for evaluation")
 flags.DEFINE_integer("shuffle_buffer", 60000, "Dataset shuffle buffer size")
 flags.DEFINE_integer("prefetch_buffer", 1, "Dataset prefetch buffer size")
@@ -262,7 +262,7 @@ class SVHN(Dataset):
     def download(self):
         """ Download the SVHN files from online """
         train_fp, test_fp = self.download_dataset(
-            ["train_32x32.mat", "test_32x32.mat", "extra_32x32.mat"],
+            ["train_32x32.mat", "test_32x32.mat"],  # "extra_32x32.mat"
             "http://ufldl.stanford.edu/housenumbers/")
         return train_fp, test_fp
 
@@ -298,7 +298,7 @@ class USPS(Dataset):
     def download(self):
         """ Download the USPS files from online """
         train_fp, test_fp = self.download_dataset(
-            ["zip.train.gz", "zip.test.gz", "zip.info.txt"],
+            ["zip.train.gz", "zip.test.gz"],  # "zip.info.txt"
             "https://web.stanford.edu/~hastie/ElemStatLearn/datasets/")
         return train_fp, test_fp
 
