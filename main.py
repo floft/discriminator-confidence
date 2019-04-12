@@ -4,7 +4,6 @@ Adversarial Confidence for Domain Adaptation Pseudo-Labeling
 """
 import os
 import time
-import numpy as np
 import tensorflow as tf
 
 from absl import app
@@ -12,17 +11,17 @@ from absl import flags
 from absl import logging
 from tensorflow.python.framework import config as tfconfig
 
+import models
 import datasets
 
 from metrics import Metrics
 from checkpoints import CheckpointManager
 from utils import domain_labels
 from file_utils import last_modified_number, write_finished
-from models import DomainAdaptationModel, make_task_loss, make_domain_loss
 
 FLAGS = flags.FLAGS
 
-flags.DEFINE_enum("model", "flat", ["flat"], "What model type to use")
+flags.DEFINE_enum("model", None, models.names(), "What model type to use")
 flags.DEFINE_string("modeldir", "models", "Directory for saving model files")
 flags.DEFINE_string("logdir", "logs", "Directory for saving log files")
 flags.DEFINE_boolean("adapt", False, "Perform domain adaptation on the model")
@@ -38,6 +37,7 @@ flags.DEFINE_integer("log_val_steps", 4000, "Log validation information every so
 flags.DEFINE_boolean("debug", False, "Start new log/model/images rather than continuing from previous run")
 flags.DEFINE_integer("debugnum", -1, "Specify exact log/model/images number to use rather than incrementing from last. (Don't pass both this and --debug at the same time.)")
 
+flags.mark_flag_as_required("model")
 flags.mark_flag_as_required("source")
 
 
@@ -182,8 +182,8 @@ def main(argv):
     num_classes = source_dataset.num_classes
 
     # Loss functions
-    task_loss = make_task_loss(FLAGS.adapt)
-    domain_loss = make_domain_loss(FLAGS.adapt)
+    task_loss = models.make_task_loss(FLAGS.adapt)
+    domain_loss = models.make_domain_loss(FLAGS.adapt)
 
     # Source domain will be [[1,0], [1,0], ...] and target domain [[0,1], [0,1], ...]
     source_domain = domain_labels(0, train_batch, num_domains)
@@ -193,7 +193,7 @@ def main(argv):
     global_step = tf.Variable(0, name="global_step", trainable=False)
 
     # Build our model
-    model = DomainAdaptationModel(num_classes, num_domains, FLAGS.model,
+    model = models.DomainAdaptationModel(num_classes, num_domains, FLAGS.model,
         global_step, FLAGS.steps)
 
     # Optimizers

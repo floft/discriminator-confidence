@@ -233,3 +233,20 @@ def compute_accuracy(y_true, y_pred):
     return tf.reduce_mean(input_tensor=tf.cast(
         tf.equal(tf.argmax(y_true, axis=-1), tf.argmax(y_pred, axis=-1)),
         tf.float32))
+
+
+# List of names
+models = [
+    "flat",
+    "dann_mnist",
+    "dann_svhn",
+    "dann_gtsrb",
+]
+
+
+# Get names
+def names():
+    """
+    Returns list of all the available models for use in DomainAdaptationModel()
+    """
+    return models
