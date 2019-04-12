@@ -118,73 +118,38 @@ class ResnetBlock(tf.keras.layers.Layer):
         return self.add([shortcut, net])
 
 
-class Classifier(tf.keras.layers.Layer):
-    """ MLP classifier -- multiple DenseBlock followed by dense of size
-    num_classes and softmax """
-    def __init__(self, layers, units, dropout, num_classes,
-            make_block=DenseBlock, **kwargs):
-        super().__init__(**kwargs)
+def make_classifier(layers, units, dropout, num_classes, make_block=DenseBlock):
         assert layers > 0, "must have layers > 0"
-        self.blocks = [make_block(units, dropout) for _ in range(layers-1)]
-        self.dense = tf.keras.layers.Dense(num_classes)
-        self.act = tf.keras.layers.Activation("softmax")
-
-    def call(self, inputs, training=None):
-        net = inputs
-
-        for block in self.blocks:
-            net = block(net, training=training)
-
-        net = self.dense(net)
-        net = self.act(net)
-
-        return net
+    layers = [make_block(units, dropout) for _ in range(layers-1)]
+    last = [
+        tf.keras.layers.Dense(num_classes),
+        tf.keras.layers.Activation("softmax"),
+    ]
+    return tf.keras.Sequential(layers + last)
 
 
-class DomainClassifier(tf.keras.layers.Layer):
-    """ Classifier() but flipping gradients """
-    def __init__(self, layers, units, dropout, num_domains,
-            global_step, grl_schedule,
-            make_classifier=Classifier, **kwargs):
-        super().__init__(**kwargs)
-        self.flip_gradient = FlipGradient(global_step, grl_schedule)
-        self.classifier = make_classifier(layers, units, dropout, num_domains)
-
-    def call(self, inputs, training=None):
-        net = self.flip_gradient(inputs, training=training)
-        net = self.classifier(net, training=training)
-        return net
+def make_domain_classifier(layers, units, dropout, num_domains, global_step,
+        grl_schedule):
+    return tf.keras.Sequential([
+        FlipGradient(global_step, grl_schedule),
+        make_classifier(layers, units, dropout, num_domains),
+    ])
 
 
-class FeatureExtractor(tf.keras.layers.Layer):
-    """ Resnet feature extractor """
-    def __init__(self, layers, units, dropout,
-            make_base_block=DenseBlock, make_res_block=ResnetBlock, **kwargs):
-        super().__init__(**kwargs)
+def make_feature_extractor(layers, units, dropout,
+        make_base_block=DenseBlock, make_res_block=ResnetBlock):
         assert layers > 0, "must have layers > 0"
         # First can't be residual since x isn't of size units
-        self.blocks = [make_base_block(units, dropout) for _ in range(FLAGS.resnet_layers)]
-        self.blocks += [make_res_block(units, dropout) for _ in range(layers-1)]
-
-    def call(self, inputs, training=None):
-        net = inputs
-
-        for block in self.blocks:
-            net = block(net, training=training)
-
-        return net
+    first = [make_base_block(units, dropout) for _ in range(FLAGS.resnet_layers)]
+    rest = [make_res_block(units, dropout) for _ in range(layers-1)]
+    return tf.keras.Sequential(first + rest)
 
 
-class FlatModel(tf.keras.layers.Layer):
-    """ Flatten and normalize then model """
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.flatten = tf.keras.layers.Flatten()
-        self.bn = tf.keras.layers.BatchNormalization(momentum=0.999)
-
-    def call(self, inputs, training=None):
-        net = self.flatten(inputs)
-        return self.bn(net, training=training)
+def make_flat_model():
+    return tf.keras.Sequential([
+        tf.keras.layers.Flatten(),
+        tf.keras.layers.BatchNormalization(momentum=0.999),
+    ])
 
 
 def DannGrlSchedule(num_steps):
@@ -215,10 +180,10 @@ class DomainAdaptationModel(tf.keras.Model):
 
         grl_schedule = DannGrlSchedule(num_steps)
 
-        self.feature_extractor = FeatureExtractor(FLAGS.layers, FLAGS.units, FLAGS.dropout)
-        self.task_classifier = Classifier(FLAGS.task_layers, FLAGS.units,
+        self.feature_extractor = make_feature_extractor(FLAGS.layers, FLAGS.units, FLAGS.dropout)
+        self.task_classifier = make_classifier(FLAGS.task_layers, FLAGS.units,
             FLAGS.dropout, num_classes)
-        self.domain_classifier = DomainClassifier(FLAGS.domain_layers, FLAGS.units,
+        self.domain_classifier = make_domain_classifier(FLAGS.domain_layers, FLAGS.units,
             FLAGS.dropout, num_domains, global_step, grl_schedule)
 
         if model_name == "flat":
