@@ -20,15 +20,15 @@ flags.DEFINE_float("dropout", 0.05, "Dropout probability")
 flags.register_validator("dropout", lambda v: v != 1, message="dropout cannot be 1")
 
 
-    @tf.custom_gradient
-    def flip_gradient(x, grl_lambda=1.0):
+@tf.custom_gradient
+def flip_gradient(x, grl_lambda=1.0):
     """ Forward pass identity, backward pass negate gradient and multiply by  """
-        grl_lambda = tf.cast(grl_lambda, dtype=tf.float32)
+    grl_lambda = tf.cast(grl_lambda, dtype=tf.float32)
 
-        def grad(dy):
+    def grad(dy):
         return tf.negative(dy) * grl_lambda * tf.ones_like(x)
 
-        return x, grad
+    return x, grad
 
 
 class FlipGradient(tf.keras.layers.Layer):
@@ -50,6 +50,20 @@ class FlipGradient(tf.keras.layers.Layer):
         the gradients """
         grl_lambda = self.grl_schedule(self.global_step)
         return flip_gradient(inputs, grl_lambda)
+
+
+def ConstantGrlSchedule(constant=1.0):
+    """ Constant GRL schedule (always returns the same number) """
+    def schedule(step):
+        return constant
+    return schedule
+
+
+def DannGrlSchedule(num_steps):
+    """ GRL schedule from DANN paper """
+    def schedule(step):
+        return 2/(1+tf.exp(-10*(step/(num_steps+1))))-1
+    return schedule
 
 
 class StopGradient(tf.keras.layers.Layer):
@@ -85,13 +99,6 @@ class ResnetBlock(tf.keras.layers.Layer):
         return self.add([shortcut, net], **kwargs)
 
 
-def DannGrlSchedule(num_steps):
-    """ GRL schedule from DANN paper """
-    def schedule(step):
-        return 2/(1+tf.exp(-10*(step/(num_steps+1))))-1
-    return schedule
-
-
 def make_vrada_model(num_classes, num_domains, global_step, grl_schedule):
     """
     Create model inspired by the VRADA paper model for time-series data
@@ -109,11 +116,11 @@ def make_vrada_model(num_classes, num_domains, global_step, grl_schedule):
     # General classifier used in both the task/domain classifiers
     def make_classifier(layers, num_outputs):
         layers = [make_dense_bn_dropout(units, dropout) for _ in range(layers-1)]
-    last = [
+        last = [
             tf.keras.layers.Dense(num_outputs),
-        tf.keras.layers.Activation("softmax"),
-    ]
-    return tf.keras.Sequential(layers + last)
+            tf.keras.layers.Activation("softmax"),
+        ]
+        return tf.keras.Sequential(layers + last)
 
     feature_extractor = tf.keras.Sequential([
         tf.keras.layers.Flatten(),
@@ -129,6 +136,76 @@ def make_vrada_model(num_classes, num_domains, global_step, grl_schedule):
     domain_classifier = tf.keras.Sequential([
         FlipGradient(global_step, grl_schedule),
         make_classifier(domain_layers, num_domains),
+    ])
+    return feature_extractor, task_classifier, domain_classifier
+
+
+def make_dann_mnist_model(num_classes, num_domains, global_step, grl_schedule):
+    """ Figure 4(a) MNIST architecture -- Ganin et al. DANN JMLR 2016 paper """
+    feature_extractor = tf.keras.Sequential([
+        tf.keras.layers.Conv2D(32, (5, 5), (1, 1), "valid", activation="relu"),
+        tf.keras.layers.MaxPool2D((2, 2), (2, 2), "valid"),
+        tf.keras.layers.Conv2D(48, (5, 5), (1, 1), "valid", activation="relu"),
+        tf.keras.layers.MaxPool2D((2, 2), (2, 2), "valid"),
+        tf.keras.layers.Flatten(),
+    ])
+    task_classifier = tf.keras.Sequential([
+        tf.keras.layers.Dense(100, "relu"),
+        tf.keras.layers.Dense(100, "relu"),
+        tf.keras.layers.Dense(num_classes, "softmax"),
+    ])
+    domain_classifier = tf.keras.Sequential([
+        FlipGradient(global_step, grl_schedule),
+        tf.keras.layers.Dense(100, "relu"),
+        tf.keras.layers.Dense(num_domains, "softmax"),  # they used 1 logistic
+    ])
+    return feature_extractor, task_classifier, domain_classifier
+
+
+def make_dann_svhn_model(num_classes, num_domains, global_step, grl_schedule):
+    """ Figure 4(b) SVHN architecture -- Ganin et al. DANN JMLR 2016 paper """
+    feature_extractor = tf.keras.Sequential([
+        tf.keras.layers.Conv2D(64, (5, 5), (1, 1), "valid", activation="relu"),
+        tf.keras.layers.MaxPool2D((3, 3), (2, 2), "valid"),
+        tf.keras.layers.Conv2D(64, (5, 5), (1, 1), "valid", activation="relu"),
+        tf.keras.layers.MaxPool2D((3, 3), (2, 2), "valid"),
+        tf.keras.layers.Conv2D(128, (5, 5), (1, 1), "valid", activation="relu"),
+        tf.keras.layers.Flatten(),
+    ])
+    task_classifier = tf.keras.Sequential([
+        tf.keras.layers.Dense(3072, "relu"),
+        tf.keras.layers.Dense(2048, "relu"),
+        tf.keras.layers.Dense(num_classes, "softmax"),
+    ])
+    domain_classifier = tf.keras.Sequential([
+        FlipGradient(global_step, grl_schedule),
+        tf.keras.layers.Dense(1024, "relu"),
+        tf.keras.layers.Dense(1024, "relu"),
+        tf.keras.layers.Dense(num_domains, "softmax"),  # they used 1 logistic
+    ])
+    return feature_extractor, task_classifier, domain_classifier
+
+
+def make_dann_gtsrb_model(num_classes, num_domains, global_step, grl_schedule):
+    """ Figure 4(c) SVHN architecture -- Ganin et al. DANN JMLR 2016 paper """
+    feature_extractor = tf.keras.Sequential([
+        tf.keras.layers.Conv2D(96, (5, 5), (1, 1), "valid", activation="relu"),
+        tf.keras.layers.MaxPool2D((2, 2), (2, 2), "valid"),
+        tf.keras.layers.Conv2D(144, (3, 3), (1, 1), "valid", activation="relu"),
+        tf.keras.layers.MaxPool2D((2, 2), (2, 2), "valid"),
+        tf.keras.layers.Conv2D(256, (5, 5), (1, 1), "valid", activation="relu"),
+        tf.keras.layers.MaxPool2D((2, 2), (2, 2), "valid"),
+        tf.keras.layers.Flatten(),
+    ])
+    task_classifier = tf.keras.Sequential([
+        tf.keras.layers.Dense(512, "relu"),
+        tf.keras.layers.Dense(num_classes, "softmax"),
+    ])
+    domain_classifier = tf.keras.Sequential([
+        FlipGradient(global_step, grl_schedule),
+        tf.keras.layers.Dense(1024, "relu"),
+        tf.keras.layers.Dense(1024, "relu"),
+        tf.keras.layers.Dense(num_domains, "softmax"),  # they used 1 logistic
     ])
     return feature_extractor, task_classifier, domain_classifier
 
@@ -150,10 +227,16 @@ class DomainAdaptationModel(tf.keras.Model):
             num_steps, **kwargs):
         super().__init__(**kwargs)
         grl_schedule = DannGrlSchedule(num_steps)
+        args = (num_classes, num_domains, global_step, grl_schedule)
 
         if model_name == "flat":
-            fe, task, domain = make_vrada_model(num_classes, num_domains,
-                global_step, grl_schedule)
+            fe, task, domain = make_vrada_model(*args)
+        elif model_name == "dann_mnist":
+            fe, task, domain = make_dann_mnist_model(*args)
+        elif model_name == "dann_svhn":
+            fe, task, domain = make_dann_svhn_model(*args)
+        elif model_name == "dann_gtsrb":
+            fe, task, domain = make_dann_gtsrb_model(*args)
         else:
             raise NotImplementedError("Model name: "+str(model_name))
 
