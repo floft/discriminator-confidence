@@ -7,16 +7,6 @@ layer.
 
 Provides the model DomainAdaptationModel() and its components along with the
 make_{task,domain}_loss() functions. Also, compute_accuracy() if desired.
-
-Usage:
-    # Build our model
-    model = DomainAdaptationModel(num_classes, num_domains, name_of_model)
-
-    # During training
-    task_y_pred, domain_y_pred = model(x, grl_lambda=1.0, training=True)
-
-    # During evaluation
-    task_y_pred, domain_y_pred = model(x, training=False)
 """
 import tensorflow as tf
 
@@ -26,11 +16,6 @@ from tensorflow.python.keras import backend as K
 FLAGS = flags.FLAGS
 
 flags.DEFINE_float("dropout", 0.05, "Dropout probability")
-flags.DEFINE_integer("units", 50, "Number of LSTM hidden units and VRNN latent variable size")
-flags.DEFINE_integer("layers", 5, "Number of layers for the feature extractor")
-flags.DEFINE_integer("task_layers", 1, "Number of layers for the task classifier")
-flags.DEFINE_integer("domain_layers", 2, "Number of layers for the domain classifier")
-flags.DEFINE_integer("resnet_layers", 2, "Number of layers within a single resnet block")
 
 flags.register_validator("dropout", lambda v: v != 1, message="dropout cannot be 1")
 
@@ -59,7 +44,7 @@ class FlipGradient(tf.keras.layers.Layer):
         self.global_step = global_step
         self.grl_schedule = grl_schedule
 
-    def call(self, inputs, training=None):
+    def call(self, inputs, **kwargs):
         """ Calculate grl_lambda first based on the current global step (a
         variable) and then create the layer that does nothing except flip
         the gradients """
@@ -69,87 +54,35 @@ class FlipGradient(tf.keras.layers.Layer):
 
 class StopGradient(tf.keras.layers.Layer):
     """ Stop gradient layer """
-    def call(self, inputs, training=None):
+    def call(self, inputs, **kwargs):
         return tf.stop_gradient(inputs)
 
 
-class DenseBlock(tf.keras.layers.Layer):
-    """
-    Dense block with batch norm and dropout
-
-    Note: doing this rather than Sequential because dense gives error if we pass
-    training=True to it
-    """
-    def __init__(self, units, dropout, **kwargs):
-        super().__init__(**kwargs)
-        self.dense = tf.keras.layers.Dense(units)
-        self.bn = tf.keras.layers.BatchNormalization()
-        self.act = tf.keras.layers.Activation("relu")
-        self.dropout = tf.keras.layers.Dropout(dropout)
-
-    def call(self, inputs, training=None):
-        net = self.dense(inputs)
-        net = self.bn(net, training=training)
-        net = self.act(net)
-        net = self.dropout(net, training=training)
-        return net
+def make_dense_bn_dropout(units, dropout):
+    return tf.keras.Sequential([
+        tf.keras.layers.Dense(units),
+        tf.keras.layers.BatchNormalization(),
+        tf.keras.layers.Activation("relu"),
+        tf.keras.layers.Dropout(dropout),
+    ])
 
 
 class ResnetBlock(tf.keras.layers.Layer):
     """ Block consisting of other blocks but with residual connections """
-    def __init__(self, units, dropout, layers=None,
-            make_block=DenseBlock, **kwargs):
+    def __init__(self, units, dropout, layers, **kwargs):
         super().__init__(**kwargs)
-
-        if layers is None:
-            layers = FLAGS.resnet_layers
-
-        self.blocks = [make_block(units, dropout) for _ in range(layers)]
+        self.blocks = [make_dense_bn_dropout(units, dropout) for _ in range(layers)]
         self.add = tf.keras.layers.Add()
 
-    def call(self, inputs, training=None):
+    def call(self, inputs, **kwargs):
         """ Like Sequential but with a residual connection """
         shortcut = inputs
         net = inputs
 
         for block in self.blocks:
-            net = block(net, training=training)
+            net = block(net, **kwargs)
 
-        return self.add([shortcut, net])
-
-
-def make_classifier(layers, units, dropout, num_classes, make_block=DenseBlock):
-        assert layers > 0, "must have layers > 0"
-    layers = [make_block(units, dropout) for _ in range(layers-1)]
-    last = [
-        tf.keras.layers.Dense(num_classes),
-        tf.keras.layers.Activation("softmax"),
-    ]
-    return tf.keras.Sequential(layers + last)
-
-
-def make_domain_classifier(layers, units, dropout, num_domains, global_step,
-        grl_schedule):
-    return tf.keras.Sequential([
-        FlipGradient(global_step, grl_schedule),
-        make_classifier(layers, units, dropout, num_domains),
-    ])
-
-
-def make_feature_extractor(layers, units, dropout,
-        make_base_block=DenseBlock, make_res_block=ResnetBlock):
-        assert layers > 0, "must have layers > 0"
-        # First can't be residual since x isn't of size units
-    first = [make_base_block(units, dropout) for _ in range(FLAGS.resnet_layers)]
-    rest = [make_res_block(units, dropout) for _ in range(layers-1)]
-    return tf.keras.Sequential(first + rest)
-
-
-def make_flat_model():
-    return tf.keras.Sequential([
-        tf.keras.layers.Flatten(),
-        tf.keras.layers.BatchNormalization(momentum=0.999),
-    ])
+        return self.add([shortcut, net], **kwargs)
 
 
 def DannGrlSchedule(num_steps):
@@ -159,50 +92,91 @@ def DannGrlSchedule(num_steps):
     return schedule
 
 
+def make_vrada_model(num_classes, num_domains, global_step, grl_schedule):
+    """
+    Create model inspired by the VRADA paper model for time-series data
+
+    Note: VRADA model had a VRNN though rather than just flattening data and
+    didn't use residual connections.
+    """
+    fe_layers = 5
+    task_layers = 1
+    domain_layers = 2
+    resnet_layers = 2
+    units = 50
+    dropout = FLAGS.dropout
+
+    # General classifier used in both the task/domain classifiers
+    def make_classifier(layers, num_outputs):
+        layers = [make_dense_bn_dropout(units, dropout) for _ in range(layers-1)]
+    last = [
+            tf.keras.layers.Dense(num_outputs),
+        tf.keras.layers.Activation("softmax"),
+    ]
+    return tf.keras.Sequential(layers + last)
+
+    feature_extractor = tf.keras.Sequential([
+        tf.keras.layers.Flatten(),
+        tf.keras.layers.BatchNormalization(momentum=0.999),
+    ] + [  # First can't be residual since x isn't of size units
+        make_dense_bn_dropout(units, dropout) for _ in range(resnet_layers)
+    ] + [
+        ResnetBlock(units, dropout, resnet_layers) for _ in range(fe_layers-1)
+    ])
+    task_classifier = tf.keras.Sequential([
+        make_classifier(task_layers, num_classes),
+    ])
+    domain_classifier = tf.keras.Sequential([
+        FlipGradient(global_step, grl_schedule),
+        make_classifier(domain_layers, num_domains),
+    ])
+    return feature_extractor, task_classifier, domain_classifier
+
+
 class DomainAdaptationModel(tf.keras.Model):
     """
-    Contains custom model, feature extractor, task classifier, and domain
-    classifier
-
-    The custom model before the feature extractor depends on the command line
-    argument.
+    Domain adaptation model -- task and domain classifier outputs, depends on
+    command line --model=X argument
 
     Usage:
-        model = DomainAdaptationModel(num_classes, num_domains, "flat")
+        model = DomainAdaptationModel(num_classes, num_domains, "flat",
+            global_step, num_steps)
 
         with tf.GradientTape() as tape:
-            task_y_pred, domain_y_pred = model(x, grl_lambda=1.0, training=True)
+            task_y_pred, domain_y_pred = model(x, training=True)
             ...
     """
     def __init__(self, num_classes, num_domains, model_name, global_step,
             num_steps, **kwargs):
         super().__init__(**kwargs)
-
         grl_schedule = DannGrlSchedule(num_steps)
 
-        self.feature_extractor = make_feature_extractor(FLAGS.layers, FLAGS.units, FLAGS.dropout)
-        self.task_classifier = make_classifier(FLAGS.task_layers, FLAGS.units,
-            FLAGS.dropout, num_classes)
-        self.domain_classifier = make_domain_classifier(FLAGS.domain_layers, FLAGS.units,
-            FLAGS.dropout, num_domains, global_step, grl_schedule)
-
         if model_name == "flat":
-            self.custom_model = FlatModel()
+            fe, task, domain = make_vrada_model(num_classes, num_domains,
+                global_step, grl_schedule)
         else:
             raise NotImplementedError("Model name: "+str(model_name))
+
+        self.feature_extractor = fe
+        self.task_classifier = task
+        self.domain_classifier = domain
 
     @property
     def trainable_variables_exclude_domain(self):
         """ Same as .trainable_variables but excluding the domain classifier """
         return self.feature_extractor.trainable_variables \
-            + self.task_classifier.trainable_variables \
-            + self.custom_model.trainable_variables
+            + self.task_classifier.trainable_variables
 
-    def call(self, inputs, training=None):
-        net = self.custom_model(inputs, training=training)
-        net = self.feature_extractor(net, training=training)
-        task = self.task_classifier(net, training=training)
-        domain = self.domain_classifier(net, training=training)
+    def call(self, inputs, training=None, **kwargs):
+        # Manually set the learning phase since we probably aren't using .fit()
+        if training is True:
+            tf.keras.backend.set_learning_phase(1)
+        elif training is False:
+            tf.keras.backend.set_learning_phase(0)
+
+        fe = self.feature_extractor(inputs, **kwargs)
+        task = self.task_classifier(fe, **kwargs)
+        domain = self.domain_classifier(fe, **kwargs)
         return task, domain
 
 
