@@ -33,7 +33,7 @@ from datasets.tfrecord import tfrecord_filename
 FLAGS = flags.FLAGS
 
 flags.DEFINE_integer("train_batch", 128, "Batch size for training")
-flags.DEFINE_integer("eval_batch", 16384, "Batch size for evaluation")
+flags.DEFINE_integer("eval_batch", 8192, "Batch size for evaluation")
 flags.DEFINE_integer("shuffle_buffer", 60000, "Dataset shuffle buffer size")
 flags.DEFINE_integer("prefetch_buffer", 1, "Dataset prefetch buffer size")
 flags.DEFINE_integer("eval_shuffle_seed", 0, "Evaluation shuffle seed for repeatability")
