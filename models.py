@@ -164,6 +164,9 @@ def make_dann_mnist_model(num_classes, num_domains, global_step, grl_schedule):
 
 def make_dann_svhn_model(num_classes, num_domains, global_step, grl_schedule):
     """ Figure 4(b) SVHN architecture -- Ganin et al. DANN JMLR 2016 paper """
+    dropout = FLAGS.dropout
+    weight_decay = 0.01
+
     feature_extractor = tf.keras.Sequential([
         tf.keras.layers.Conv2D(64, (5, 5), (1, 1), "valid", activation="relu"),
         tf.keras.layers.MaxPool2D((3, 3), (2, 2), "valid"),
@@ -172,16 +175,39 @@ def make_dann_svhn_model(num_classes, num_domains, global_step, grl_schedule):
         tf.keras.layers.Conv2D(128, (5, 5), (1, 1), "valid", activation="relu"),
         tf.keras.layers.Flatten(),
     ])
+    # TODO above doesn't even work? gives: "ValueError: Negative dimension size
+    # caused by subtracting 5 from 4 for
+    # 'domain_adaptation_model/sequential/conv2d_2/Conv2D' (op: 'Conv2D') with
+    # input shapes: [128,4,4,64], [5,5,64,128]."
+    # Maybe the above should all be "same" not "valid"?
     task_classifier = tf.keras.Sequential([
-        tf.keras.layers.Dense(3072, "relu"),
-        tf.keras.layers.Dense(2048, "relu"),
-        tf.keras.layers.Dense(num_classes, "softmax"),
+        tf.keras.layers.Dropout(dropout),
+        tf.keras.layers.Dense(3072, "relu",
+            kernel_regularizer=tf.keras.regularizers.l2(weight_decay),
+            bias_regularizer=tf.keras.regularizers.l2(weight_decay)),
+        tf.keras.layers.Dropout(dropout),
+        tf.keras.layers.Dense(2048, "relu",
+            kernel_regularizer=tf.keras.regularizers.l2(weight_decay),
+            bias_regularizer=tf.keras.regularizers.l2(weight_decay)),
+        tf.keras.layers.Dropout(dropout),
+        tf.keras.layers.Dense(num_classes, "softmax",
+            kernel_regularizer=tf.keras.regularizers.l2(weight_decay),
+            bias_regularizer=tf.keras.regularizers.l2(weight_decay)),
     ])
     domain_classifier = tf.keras.Sequential([
         FlipGradient(global_step, grl_schedule),
-        tf.keras.layers.Dense(1024, "relu"),
-        tf.keras.layers.Dense(1024, "relu"),
-        tf.keras.layers.Dense(num_domains, "softmax"),  # they used 1 logistic
+        tf.keras.layers.Dropout(dropout),
+        tf.keras.layers.Dense(1024, "relu",
+            kernel_regularizer=tf.keras.regularizers.l2(weight_decay),
+            bias_regularizer=tf.keras.regularizers.l2(weight_decay)),
+        tf.keras.layers.Dropout(dropout),
+        tf.keras.layers.Dense(1024, "relu",
+            kernel_regularizer=tf.keras.regularizers.l2(weight_decay),
+            bias_regularizer=tf.keras.regularizers.l2(weight_decay)),
+        tf.keras.layers.Dropout(dropout),
+        tf.keras.layers.Dense(num_domains, "softmax",
+            kernel_regularizer=tf.keras.regularizers.l2(weight_decay),
+            bias_regularizer=tf.keras.regularizers.l2(weight_decay)),  # they used 1 logistic
     ])
     return feature_extractor, task_classifier, domain_classifier
 
@@ -206,6 +232,61 @@ def make_dann_gtsrb_model(num_classes, num_domains, global_step, grl_schedule):
         tf.keras.layers.Dense(1024, "relu"),
         tf.keras.layers.Dense(1024, "relu"),
         tf.keras.layers.Dense(num_domains, "softmax"),  # they used 1 logistic
+    ])
+    return feature_extractor, task_classifier, domain_classifier
+
+
+def make_vada_model(num_classes, num_domains, global_step, grl_schedule,
+        small=False):
+    """ Table 6 Small CNN -- Shu et al. VADA / DIRT-T ICLR 2018 paper
+
+    Note: they used small for digits, traffic signs, and WiFi and large for
+    CIFAR-10 and STL-10."""
+    leak_alpha = 0.1
+
+    def conv_blocks(depth):
+        return [
+            tf.keras.layers.Conv2D(depth, (3, 3), (1, 1), "same"),
+            tf.keras.layers.BatchNormalization(),
+            tf.keras.layers.LeakyReLU(leak_alpha),
+
+            tf.keras.layers.Conv2D(depth, (3, 3), (1, 1), "same"),
+            tf.keras.layers.BatchNormalization(),
+            tf.keras.layers.LeakyReLU(leak_alpha),
+
+            tf.keras.layers.Conv2D(depth, (3, 3), (1, 1), "same"),
+            tf.keras.layers.BatchNormalization(),
+            tf.keras.layers.LeakyReLU(leak_alpha),
+        ]
+
+    def pool_blocks():
+        return [
+            tf.keras.layers.MaxPool2D((2, 2), (2, 2), "same"),
+            tf.keras.layers.Dropout(0.5),
+            tf.keras.layers.GaussianNoise(1),
+        ]
+
+    feature_extractor = tf.keras.Sequential(
+        conv_blocks(64 if small else 96)
+        + pool_blocks()
+        + conv_blocks(64 if small else 192)
+        + pool_blocks())
+    task_classifier = tf.keras.Sequential(
+        conv_blocks(64 if small else 192)
+        + [
+            tf.keras.layers.GlobalAvgPool2D(),
+            tf.keras.layers.Flatten(),
+            tf.keras.layers.Dense(num_classes, "softmax"),
+        ])
+    domain_classifier = tf.keras.Sequential([
+        FlipGradient(global_step, grl_schedule),
+        tf.keras.layers.Flatten(),
+
+        tf.keras.layers.Dense(100),
+        tf.keras.layers.BatchNormalization(),
+        tf.keras.layers.ReLU(),
+
+        tf.keras.layers.Dense(num_domains, "softmax"),  # they used 1 sigmoid
     ])
     return feature_extractor, task_classifier, domain_classifier
 
@@ -237,6 +318,10 @@ class DomainAdaptationModel(tf.keras.Model):
             fe, task, domain = make_dann_svhn_model(*args)
         elif model_name == "dann_gtsrb":
             fe, task, domain = make_dann_gtsrb_model(*args)
+        elif model_name == "vada_small":
+            fe, task, domain = make_vada_model(*args, small=True)
+        elif model_name == "vada_large":
+            fe, task, domain = make_vada_model(*args, small=False)
         else:
             raise NotImplementedError("Model name: "+str(model_name))
 
@@ -324,6 +409,8 @@ models = [
     "dann_mnist",
     "dann_svhn",
     "dann_gtsrb",
+    "vada_small",
+    "vada_large",
 ]
 
 
