@@ -30,7 +30,7 @@ flags.DEFINE_enum("target", "", [""]+load_datasets.names(), "What dataset to use
 flags.DEFINE_integer("steps", 100000, "Number of training steps to run")
 flags.DEFINE_float("lr", 0.001, "Learning rate for training")
 flags.DEFINE_float("lr_mult", 1.0, "Multiplier for extra discriminator training learning rate")
-flags.DEFINE_float("gpumem", 0.1, "Percentage of GPU memory to let TensorFlow use")
+flags.DEFINE_float("gpumem", 0.3, "Percentage of GPU memory to let TensorFlow use")
 flags.DEFINE_integer("model_steps", 4000, "Save the model every so many steps")
 flags.DEFINE_integer("log_train_steps", 500, "Log training information every so many steps")
 flags.DEFINE_integer("log_val_steps", 4000, "Log validation information every so many steps (also saves model)")
