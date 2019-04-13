@@ -20,13 +20,16 @@ flags.DEFINE_float("gpumem", 0.1, "Percentage of GPU memory to let TensorFlow us
 flags.mark_flag_as_required("source")
 
 
-def display(name, images):
-    fig = plt.figure(figsize=(4,4))
+def display(name, images, max_number=16):
+    fig = plt.figure(figsize=(4, 4))
     fig.suptitle(name)
 
-    for i, image, in enumerate(images):
+    for i, image, in enumerate(images[:max_number]):
         plt.subplot(4, 4, i+1)
         channels = image.shape[2]
+
+        if i == 0:
+            print(name, "shape", image.shape)
 
         if channels == 1:
             plt.imshow(image[:, :, 0] * 127.5 + 127.5, cmap='gray')
@@ -47,24 +50,19 @@ def main(argv):
 
     # Input data
     if FLAGS.target != "":
-        source_dataset, target_dataset = datasets.load_da(FLAGS.source,
-            FLAGS.target, train_batch=16)
+        source_dataset, target_dataset = datasets.load_da(FLAGS.source, FLAGS.target)
     else:
-        source_dataset = datasets.load(FLAGS.source, train_batch=16)
+        source_dataset = datasets.load(FLAGS.source)
         target_dataset = None
 
-    source_iter = iter(source_dataset.train)
-    target_iter = iter(target_dataset.train) \
-        if target_dataset is not None else None
-    source_batch = next(source_iter)
-    target_batch = next(target_iter) \
+    source_data = source_dataset.train_images
+    target_data = target_dataset.train_images \
         if target_dataset is not None else None
 
-    # Display a batch of data ([0] is the image, [1] is the label)
-    display("Source", source_batch[0])
+    display("Source", source_data)
 
     if target_dataset is not None:
-        display("Target", target_batch[0])
+        display("Target", target_data)
 
     plt.show()
 

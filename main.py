@@ -12,7 +12,7 @@ from absl import logging
 from tensorflow.python.framework import config as tfconfig
 
 import models
-import datasets
+import load_datasets
 
 from metrics import Metrics
 from checkpoints import CheckpointManager
@@ -25,8 +25,8 @@ flags.DEFINE_enum("model", None, models.names(), "What model type to use")
 flags.DEFINE_string("modeldir", "models", "Directory for saving model files")
 flags.DEFINE_string("logdir", "logs", "Directory for saving log files")
 flags.DEFINE_boolean("adapt", False, "Perform domain adaptation on the model")
-flags.DEFINE_enum("source", None, datasets.names(), "What dataset to use as the source")
-flags.DEFINE_enum("target", "", [""]+datasets.names(), "What dataset to use as the target")
+flags.DEFINE_enum("source", None, load_datasets.names(), "What dataset to use as the source")
+flags.DEFINE_enum("target", "", [""]+load_datasets.names(), "What dataset to use as the target")
 flags.DEFINE_integer("steps", 100000, "Number of training steps to run")
 flags.DEFINE_float("lr", 0.0001, "Learning rate for training")
 flags.DEFINE_float("lr_mult", 1.0, "Multiplier for extra discriminator training learning rate")
@@ -161,12 +161,13 @@ def main(argv):
     # datasets were used during training; the test sets usedfor reporting scores
     # only." (self-ensembling) -- so, only use *_test for evaluation.
     if FLAGS.target != "":
-        source_dataset, target_dataset = datasets.load_da(FLAGS.source,
+        source_dataset, target_dataset = load_datasets.load_da(FLAGS.source,
             FLAGS.target, train_batch=train_batch)
         assert source_dataset.num_classes == target_dataset.num_classes, \
             "Adapting from source to target with different classes not supported"
     else:
-        source_dataset = datasets.load(FLAGS.source, train_batch=train_batch)
+        raise NotImplementedError("currently don't support only source")
+        source_dataset = load_datasets.load(FLAGS.source, train_batch=train_batch)
         target_dataset = None
 
     # Iterator and evaluation datasets if we have the dataset

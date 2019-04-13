@@ -1,44 +1,16 @@
 """
-Datasets
+Datsets
 
-Usage:
-    import datasets
-
-    print(datasets.names()) # mnist, usps, svhn, ...
-    mnist = datasets.load("mnist")
-    class_number = mnist.label_to_int("5")
-    class_name = mnist.int_to_label(5)
-
-    # Training
-    train_iter = iter(mnist.train):
-    labels = mnist.class_labels
-    while True:
-        next_batch = next(train_iter)
-
-    # Evaluation
-    for x, y in mnist.train_evaluation:
-        ...
-    for x, y in mnist.test_evaluation:
-        ...
+Load the desired datasets into memory so we can write them to tfrecord files
+in generate_tfrecords.py
 """
 import os
 import gzip
+import zipfile
 import tarfile
 import scipy.io
 import numpy as np
 import tensorflow as tf
-
-from absl import app
-from absl import flags
-
-FLAGS = flags.FLAGS
-
-flags.DEFINE_integer("train_batch", 128, "Batch size for training")
-flags.DEFINE_integer("eval_batch", 16384, "Batch size for evaluation")
-flags.DEFINE_integer("shuffle_buffer", 60000, "Dataset shuffle buffer size")
-flags.DEFINE_integer("prefetch_buffer", 1, "Dataset prefetch buffer size")
-flags.DEFINE_integer("eval_shuffle_seed", 0, "Evaluation shuffle seed for repeatability")
-flags.DEFINE_integer("eval_max_examples", 0, "Max number of examples to evaluate for validation (default 0, i.e. all)")
 
 
 class Dataset:
@@ -61,9 +33,7 @@ class Dataset:
 
     Also, add to the datasets={"something": Something, ...} dictionary below.
     """
-    def __init__(self, num_classes, class_labels, train_batch=None,
-            eval_batch=None, shuffle_buffer=None, prefetch_buffer=None,
-            eval_shuffle_seed=None, eval_max_examples=None,
+    def __init__(self, num_classes, class_labels,
             resize=None, pad_to=None, pad_const=0,
             convert_to_gray=False, convert_to_rgb=False):
         """
@@ -74,15 +44,16 @@ class Dataset:
         the desired output tensor dimensions (excluding batch size and number
         of channels). Pad_const is the value to pad with. Resize is done before
         padding. Convert gray/rgb if true will convert to 1 or 3 channels
-        respectively. Other arguments if None are defaults from command line
-        flags.
+        respectively.
 
         For example,
             Dataset(num_classes=2, class_labels=["class1", "class2"],
                 resize=[28,28], pad=[32,32], pad_const=-1, convert_to_gray=True)
 
         This calls load() to get the data, process() to normalize, convert to
-        float, etc., and then load_dataset() to create the tf.data.Dataset's.
+        float, etc.
+
+        At the end, look at dataset.{train,test}_{images,labels}
         """
         # Sanity checks
         assert num_classes == len(class_labels), \
@@ -97,39 +68,16 @@ class Dataset:
         # Set parameters
         self.num_classes = num_classes
         self.class_labels = class_labels
-        self.train_batch = train_batch
-        self.eval_batch = eval_batch
-        self.shuffle_buffer = shuffle_buffer
-        self.prefetch_buffer = prefetch_buffer
-        self.eval_shuffle_seed = eval_shuffle_seed
-        self.eval_max_examples = eval_max_examples
         self.resize = resize
         self.pad_to = pad_to
         self.pad_const = pad_const
         self.convert_to_gray = convert_to_gray
         self.convert_to_rgb = convert_to_rgb
 
-        # Set defaults if not specified
-        if self.train_batch is None:
-            self.train_batch = FLAGS.train_batch
-        if self.eval_batch is None:
-            self.eval_batch = FLAGS.eval_batch
-        if self.shuffle_buffer is None:
-            self.shuffle_buffer = FLAGS.shuffle_buffer
-        if self.prefetch_buffer is None:
-            self.prefetch_buffer = FLAGS.prefetch_buffer
-        if self.eval_shuffle_seed is None:
-            self.eval_shuffle_seed = FLAGS.eval_shuffle_seed
-        if self.eval_max_examples is None:
-            self.eval_max_examples = FLAGS.eval_max_examples
-
         # Load the dataset
         train_images, train_labels, test_images, test_labels = self.load()
         self.train_images, self.train_labels = self.process(train_images, train_labels)
         self.test_images, self.test_labels = self.process(test_images, test_labels)
-        self.train, self.train_evaluation, self.test_evaluation = \
-            self.load_dataset(self.train_images, self.train_labels,
-            self.test_images, self.test_labels)
 
     def load(self):
         raise NotImplementedError("must implement load() for Dataset class")
@@ -146,36 +94,6 @@ class Dataset:
         train_fp = downloaded_files[train_index]
         test_fp = downloaded_files[test_index]
         return train_fp, test_fp
-
-    def tf_dataset(self, data, labels, batch_size, count=False, evaluation=False):
-        dataset = tf.data.Dataset.from_tensor_slices((data, labels))
-
-        # If desired, take the first max_examples examples
-        if evaluation and self.eval_max_examples != 0:
-            dataset = dataset.take(self.eval_max_examples)
-
-        if count:  # only count, so no need to shuffle
-            pass
-        elif evaluation:  # don't repeat since we want to evaluate entire set
-            dataset = dataset.shuffle(self.shuffle_buffer, seed=self.eval_shuffle_seed)
-        else:  # repeat, shuffle, and batch
-            dataset = dataset.apply(tf.data.experimental.shuffle_and_repeat(self.shuffle_buffer))
-
-        dataset = dataset.batch(batch_size).prefetch(self.prefetch_buffer)
-
-        return dataset
-
-    def load_dataset(self, train_images, train_labels, test_images, test_labels):
-        """
-        Load the X dataset as a tf.data.Dataset from train/test images/labels
-        """
-        train_dataset = self.tf_dataset(train_images, train_labels,
-            self.train_batch)
-        eval_train_dataset = self.tf_dataset(train_images, train_labels,
-            self.eval_batch, evaluation=True)
-        eval_test_dataset = self.tf_dataset(test_images, test_labels,
-            self.eval_batch, evaluation=True)
-        return train_dataset, eval_train_dataset, eval_test_dataset
 
     def calculate_padding(self, input_size, desired_output_size):
         """ Calculate before/after padding to nearly center it, if odd then
@@ -236,10 +154,11 @@ class Dataset:
 
 class MNIST(Dataset):
     """ Load the MNIST dataset """
+    num_classes = 10
+    class_labels = [str(x) for x in range(10)]
+
     def __init__(self, *args, **kwargs):
-        num_classes = 10
-        class_labels = [str(x) for x in range(10)]
-        super().__init__(num_classes, class_labels, *args, **kwargs)
+        super().__init__(MNIST.num_classes, MNIST.class_labels, *args, **kwargs)
 
     def process(self, data, labels):
         """ Reshape, convert to float, normalize to [-1,1] """
@@ -256,10 +175,11 @@ class MNIST(Dataset):
 
 class SVHN(Dataset):
     """ Load the SVHN (cropped) dataset """
+    num_classes = 10
+    class_labels = [str(x) for x in range(10)]
+
     def __init__(self, *args, **kwargs):
-        num_classes = 10
-        class_labels = [str(x) for x in range(10)]
-        super().__init__(num_classes, class_labels, *args, **kwargs)
+        super().__init__(SVHN.num_classes, SVHN.class_labels, *args, **kwargs)
 
     def download(self):
         """ Download the SVHN files from online """
@@ -292,10 +212,11 @@ class SVHN(Dataset):
 
 class USPS(Dataset):
     """ Load the USPS dataset """
+    num_classes = 10
+    class_labels = [str(x) for x in range(10)]
+
     def __init__(self, *args, **kwargs):
-        num_classes = 10
-        class_labels = [str(x) for x in range(10)]
-        super().__init__(num_classes, class_labels, *args, **kwargs)
+        super().__init__(USPS.num_classes, USPS.class_labels, *args, **kwargs)
 
     def download(self):
         """ Download the USPS files from online """
@@ -351,10 +272,12 @@ class USPS(Dataset):
 
 class MNISTM(Dataset):
     """ Load the MNIST-M dataset """
+    num_classes = 10
+    class_labels = [str(x) for x in range(10)]
+
     def __init__(self, *args, **kwargs):
-        num_classes = 10
-        class_labels = [str(x) for x in range(10)]
-        super().__init__(num_classes, class_labels, *args, **kwargs)
+        super().__init__(MNISTM.num_classes, MNISTM.class_labels,
+            *args, **kwargs)
 
     def process(self, data, labels):
         """ Normalize, float """
@@ -378,22 +301,21 @@ class MNISTM(Dataset):
         test_images = {}
 
         # Get data from the file
-        tar = tarfile.open(compressed, "r:gz")
+        with tarfile.open(compressed, "r:gz") as tar:
+            for member in tar.getmembers():
+                f = tar.extractfile(member)
+                if f is not None:
+                    folder, filename = os.path.split(member.name.replace("mnist_m/", ""))
+                    content = f.read()
 
-        for member in tar.getmembers():
-            f = tar.extractfile(member)
-            if f is not None:
-                folder, filename = os.path.split(member.name.replace("mnist_m/", ""))
-                content = f.read()
-
-                if folder == "mnist_m_train":
-                    train_images[filename] = self.get_image(content)
-                elif folder == "mnist_m_test":
-                    test_images[filename] = self.get_image(content)
-                elif folder == "" and filename == "mnist_m_train_labels.txt":
-                    train_labels = self.get_labels(content)
-                elif folder == "" and filename == "mnist_m_test_labels.txt":
-                    test_labels = self.get_labels(content)
+                    if folder == "mnist_m_train":
+                        train_images[filename] = self.get_image(content)
+                    elif folder == "mnist_m_test":
+                        test_images[filename] = self.get_image(content)
+                    elif folder == "" and filename == "mnist_m_train_labels.txt":
+                        train_labels = self.get_labels(content)
+                    elif folder == "" and filename == "mnist_m_test_labels.txt":
+                        test_labels = self.get_labels(content)
 
         assert test_labels is not None and train_labels is not None, \
             "Could not find mnist_m_{train,test}_labels.txt in "+compressed+" file" \
@@ -450,12 +372,53 @@ class MNISTM(Dataset):
         return x, y
 
 
+class SynNumbers(Dataset):
+    """ Load the SynNumbers / SynthDigits dataset """
+    num_classes = 10
+    class_labels = [str(x) for x in range(10)]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(SynNumbers.num_classes, SynNumbers.class_labels,
+            *args, **kwargs)
+
+    def process(self, data, labels):
+        """ Convert to float, normalize to [-1,1] """
+        data = data.astype("float32")
+        data = (data - 127.5) / 127.5
+        labels = self.one_hot(labels)
+        return super().process(data, labels)
+
+    def load_file(self, fp):
+        """ Load from .mat file """
+        data = scipy.io.loadmat(fp)
+        images = data["X"].transpose([3, 0, 1, 2])
+        labels = data["y"].reshape([-1])
+        return images, labels
+
+    def load(self):
+        # Check that the compressed file exists
+        compressed = "SynthDigits.zip"
+
+        if not os.path.exists(compressed):
+            print("Download the SynNumbers SynthDigits.zip file from "
+                "http://yaroslav.ganin.net/")
+
+        with zipfile.ZipFile(compressed, "r") as archive:
+            with archive.open("synth_train_32x32.mat") as train_fp:
+                train_images, train_labels = self.load_file(train_fp)
+            with archive.open("synth_test_32x32.mat") as test_fp:
+                test_images, test_labels = self.load_file(test_fp)
+
+        return train_images, train_labels, test_images, test_labels
+
+
 # List of datasets
 datasets = {
     "mnist": MNIST,
     "usps": USPS,
     "svhn": SVHN,
     "mnistm": MNISTM,
+    "synnumbers": SynNumbers,
 }
 
 
@@ -481,7 +444,7 @@ def load_da(source_name, target_name, *args, **kwargs):
 
     # MNIST <-> MNIST-M: DANN doesn't specify, but maybe padded MNIST to
     # 32x32 and converted to RGB (like with SVHN)
-    if source_name == "mnist" and target_name == "mnistm":
+    elif source_name == "mnist" and target_name == "mnistm":
         source_dataset = load(source_name, *args, pad_to=[32, 32], pad_const=-1,
             convert_to_rgb=True, **kwargs)
         target_dataset = load(target_name, *args, **kwargs)
@@ -516,16 +479,3 @@ def names():
     Returns list of all the available datasets to load with datasets.load(name)
     """
     return list(datasets.keys())
-
-
-def main(argv):
-    print("Available datasets:", names())
-
-    # Example showing that the sizes and number of channels are matched
-    source, target = load_da("mnist", "usps")
-    print("Source:", source.train)
-    print("Target:", target.train)
-
-
-if __name__ == "__main__":
-    app.run(main)

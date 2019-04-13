@@ -28,3 +28,25 @@ def write_tfrecord(filename, x, y):
         for i in range(len(x)):
             tf_example = create_tf_example(x[i], y[i])
             writer.write(tf_example.SerializeToString())
+
+
+def tfrecord_filename(domain1, domain2, dataset_name, train_or_test):
+    """
+    Determine tfrecord filename for source --> target adaptation,
+    loading the dataset_name (one of source or target) for training or testing
+    """
+    names = [domain1, domain2]
+
+    # Sanity checks
+    assert train_or_test in ["train", "test"], \
+        "train_or_test must be one of \"train\" or \"test\""
+    assert dataset_name in names, \
+        "dataset_name must be one of domain1 or domain2"
+
+    # Prefix is the source and target names but sorted
+    names.sort()
+    prefix = names[0]+"_and_"+names[1]
+
+    filename = "%s_%s_%s.tfrecord"%(prefix, dataset_name, train_or_test)
+
+    return filename
