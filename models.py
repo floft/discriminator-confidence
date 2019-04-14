@@ -168,18 +168,13 @@ def make_dann_svhn_model(num_classes, num_domains, global_step, grl_schedule):
     weight_decay = 0.01
 
     feature_extractor = tf.keras.Sequential([
-        tf.keras.layers.Conv2D(64, (5, 5), (1, 1), "valid", activation="relu"),
-        tf.keras.layers.MaxPool2D((3, 3), (2, 2), "valid"),
-        tf.keras.layers.Conv2D(64, (5, 5), (1, 1), "valid", activation="relu"),
-        tf.keras.layers.MaxPool2D((3, 3), (2, 2), "valid"),
-        tf.keras.layers.Conv2D(128, (5, 5), (1, 1), "valid", activation="relu"),
+        tf.keras.layers.Conv2D(64, (5, 5), (1, 1), "same", activation="relu"),
+        tf.keras.layers.MaxPool2D((3, 3), (2, 2), "same"),
+        tf.keras.layers.Conv2D(64, (5, 5), (1, 1), "same", activation="relu"),
+        tf.keras.layers.MaxPool2D((3, 3), (2, 2), "same"),
+        tf.keras.layers.Conv2D(128, (5, 5), (1, 1), "same", activation="relu"),
         tf.keras.layers.Flatten(),
     ])
-    # TODO above doesn't even work? gives: "ValueError: Negative dimension size
-    # caused by subtracting 5 from 4 for
-    # 'domain_adaptation_model/sequential/conv2d_2/Conv2D' (op: 'Conv2D') with
-    # input shapes: [128,4,4,64], [5,5,64,128]."
-    # Maybe the above should all be "same" not "valid"?
     task_classifier = tf.keras.Sequential([
         tf.keras.layers.Dropout(dropout),
         tf.keras.layers.Dense(3072, "relu",
@@ -308,6 +303,7 @@ class DomainAdaptationModel(tf.keras.Model):
             num_steps, **kwargs):
         super().__init__(**kwargs)
         grl_schedule = DannGrlSchedule(num_steps)
+        #grl_schedule = ConstantGrlSchedule(0.01)  # Possibly for VADA
         args = (num_classes, num_domains, global_step, grl_schedule)
 
         if model_name == "flat":
