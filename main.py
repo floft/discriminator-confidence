@@ -34,6 +34,7 @@ flags.DEFINE_float("gpumem", 0.3, "Percentage of GPU memory to let TensorFlow us
 flags.DEFINE_integer("model_steps", 4000, "Save the model every so many steps")
 flags.DEFINE_integer("log_train_steps", 500, "Log training information every so many steps")
 flags.DEFINE_integer("log_val_steps", 4000, "Log validation information every so many steps (also saves model)")
+flags.DEFINE_boolean("test", False, "Use real test set for evaluation rather than validation set")
 flags.DEFINE_boolean("debug", False, "Start new log/model/images rather than continuing from previous run")
 flags.DEFINE_integer("debugnum", -1, "Specify exact log/model/images number to use rather than incrementing from last. (Don't pass both this and --debug at the same time.)")
 
@@ -158,16 +159,19 @@ def main(argv):
     # Input training data
     #
     # Note: "It is worth noting that only the training sets of the small image
-    # datasets were used during training; the test sets usedfor reporting scores
-    # only." (self-ensembling) -- so, only use *_test for evaluation.
+    # datasets were used during training; the test sets used for reporting
+    # scores only." (self-ensembling) -- so, only use *_test for evaluation.
+    # However, for now we'll use 1000 random target test samples for the
+    # validation dataset (as is common).
     if FLAGS.target != "":
         source_dataset, target_dataset = load_datasets.load_da(FLAGS.source,
-            FLAGS.target, train_batch=train_batch)
+            FLAGS.target, test=FLAGS.test, train_batch=train_batch)
         assert source_dataset.num_classes == target_dataset.num_classes, \
             "Adapting from source to target with different classes not supported"
     else:
         raise NotImplementedError("currently don't support only source")
-        source_dataset = load_datasets.load(FLAGS.source, train_batch=train_batch)
+        source_dataset = load_datasets.load(FLAGS.source, test=FLAGS.test,
+            train_batch=train_batch)
         target_dataset = None
 
     # Iterator and evaluation datasets if we have the dataset

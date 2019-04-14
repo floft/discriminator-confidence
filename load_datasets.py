@@ -164,10 +164,14 @@ class Dataset:
         return self.class_labels[label_index]
 
 
-def load_da(source_name, target_name, *args, **kwargs):
+def load_da(source_name, target_name, test=False, *args, **kwargs):
     """ Load two datasets (source and target) but perform necessary conversions
     to make them compatable for adaptation (i.e. same size, channels, etc.).
-    Names must be in datasets.names()."""
+    Names must be in datasets.names().
+
+    If test=True, then load real test set. Otherwise, load validation set as
+    the "test" data (for use during training and hyperparameter tuning).
+    """
     # Sanity checks
     assert source_name in datasets.datasets, \
         source_name + " not a supported dataset, only "+str(datasets.datasets)
@@ -187,9 +191,16 @@ def load_da(source_name, target_name, *args, **kwargs):
 
     names = (source_name, target_name)
     source_train_filenames = [_path(tfrecord_filename(*names, source_name, "train"))]
+    source_valid_filenames = [_path(tfrecord_filename(*names, source_name, "valid"))]
     source_test_filenames = [_path(tfrecord_filename(*names, source_name, "test"))]
     target_train_filenames = [_path(tfrecord_filename(*names, target_name, "train"))]
+    target_valid_filenames = [_path(tfrecord_filename(*names, target_name, "valid"))]
     target_test_filenames = [_path(tfrecord_filename(*names, target_name, "test"))]
+
+    # By default use validation data as the "test" data, unless test=True
+    if not test:
+        source_test_filenames = source_valid_filenames
+        target_test_filenames = target_valid_filenames
 
     # Create all the train, test, evaluation, ... tf.data.Dataset objects within
     # a Dataset() class that stores them
