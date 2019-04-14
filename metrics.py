@@ -34,6 +34,8 @@ from utils import tf_domain_labels
 
 FLAGS = flags.FLAGS
 
+flags.DEFINE_boolean("best_source", False, "Calculate \"best\" model based on source (vs. target) validation data")
+
 
 class Metrics:
     """
@@ -84,13 +86,13 @@ class Metrics:
             for dataset in self.datasets:
                 for classifier in self.classifiers:
                     n = "auc_%s/%s/%s"%(classifier, domain, dataset)
-                self.batch_metrics[dataset][n] = tf.keras.metrics.AUC(name=n)
+                    self.batch_metrics[dataset][n] = tf.keras.metrics.AUC(name=n)
 
                     n = "precision_%s/%s/%s"%(classifier, domain, dataset)
-                self.batch_metrics[dataset][n] = tf.keras.metrics.Precision(name=n)
+                    self.batch_metrics[dataset][n] = tf.keras.metrics.Precision(name=n)
 
                     n = "recall_%s/%s/%s"%(classifier, domain, dataset)
-                self.batch_metrics[dataset][n] = tf.keras.metrics.Recall(name=n)
+                    self.batch_metrics[dataset][n] = tf.keras.metrics.Recall(name=n)
 
         # Create all per-class metrics
         self.per_class_metrics = {dataset: {} for dataset in self.datasets}
@@ -101,19 +103,19 @@ class Metrics:
                 for dataset in self.datasets:
                     for classifier in self.classifiers:
                         n = "accuracy_%s_class_%s/%s/%s"%(classifier, class_name, domain, dataset)
-                    self.per_class_metrics[dataset][n] = tf.keras.metrics.Accuracy(name=n)
+                        self.per_class_metrics[dataset][n] = tf.keras.metrics.Accuracy(name=n)
 
                         n = "rates_%s_class_%s/TP/%s/%s"%(classifier, class_name, domain, dataset)
-                    self.per_class_metrics[dataset][n] = tf.keras.metrics.TruePositives(name=n)
+                        self.per_class_metrics[dataset][n] = tf.keras.metrics.TruePositives(name=n)
 
                         n = "rates_%s_class_%s/FP/%s/%s"%(classifier, class_name, domain, dataset)
-                    self.per_class_metrics[dataset][n] = tf.keras.metrics.FalsePositives(name=n)
+                        self.per_class_metrics[dataset][n] = tf.keras.metrics.FalsePositives(name=n)
 
                         n = "rates_%s_class_%s/TN/%s/%s"%(classifier, class_name, domain, dataset)
-                    self.per_class_metrics[dataset][n] = tf.keras.metrics.TrueNegatives(name=n)
+                        self.per_class_metrics[dataset][n] = tf.keras.metrics.TrueNegatives(name=n)
 
                         n = "rates_%s_class_%s/FN/%s/%s"%(classifier, class_name, domain, dataset)
-                    self.per_class_metrics[dataset][n] = tf.keras.metrics.FalseNegatives(name=n)
+                        self.per_class_metrics[dataset][n] = tf.keras.metrics.FalseNegatives(name=n)
 
         # Losses
         self.loss_total = tf.keras.metrics.Mean(name="loss/total")
@@ -356,7 +358,14 @@ class Metrics:
         t = time.time() - t
 
         # We use the validation accuracy to save the best model
-        acc = self.batch_metrics["validation"]["accuracy_task/source/validation"]
+        #
+        # If best_source then use source validation accuracy (so we never look)
+        # at labeled target data. However, as is commonly done, another approach
+        # is tuning based on 1000 random labeled target samples.
+        if FLAGS.best_source:
+            acc = self.batch_metrics["validation"]["accuracy_task/source/validation"]
+        else:
+            acc = self.batch_metrics["validation"]["accuracy_task/target/validation"]
         validation_accuracy = float(acc.result())
 
         if not evaluation:
