@@ -24,21 +24,25 @@ FLAGS = flags.FLAGS
 flags.DEFINE_enum("model", None, models.names(), "What model type to use")
 flags.DEFINE_string("modeldir", "models", "Directory for saving model files")
 flags.DEFINE_string("logdir", "logs", "Directory for saving log files")
-flags.DEFINE_boolean("adapt", False, "Perform domain adaptation on the model")
+flags.DEFINE_enum("method", None, ["none", "dann", "att", "pseudo"], "What method of domain adaptation to perform (or none)")
 flags.DEFINE_enum("source", None, load_datasets.names(), "What dataset to use as the source")
 flags.DEFINE_enum("target", "", [""]+load_datasets.names(), "What dataset to use as the target")
 flags.DEFINE_integer("steps", 100000, "Number of training steps to run")
 flags.DEFINE_float("lr", 0.001, "Learning rate for training")
-flags.DEFINE_float("lr_mult", 1.0, "Multiplier for extra discriminator training learning rate")
+flags.DEFINE_float("lr_domain_mult", 1.0, "Learning rate multiplier for training domain classifier")
+flags.DEFINE_float("lr_target_mult", 1.0, "Learning rate multiplier for training target classifier")
+flags.DEFINE_float("lr_pseudo_mult", 0.5, "Learning rate multiplier for training task classifier on pseudo-labeled data")
 flags.DEFINE_float("gpumem", 0.3, "Percentage of GPU memory to let TensorFlow use")
 flags.DEFINE_integer("model_steps", 4000, "Save the model every so many steps")
 flags.DEFINE_integer("log_train_steps", 500, "Log training information every so many steps")
 flags.DEFINE_integer("log_val_steps", 4000, "Log validation information every so many steps (also saves model)")
+flags.DEFINE_boolean("target_classifier", True, "Use separate target classifier in ATT or Pseudo[-labeling] methods")
 flags.DEFINE_boolean("test", False, "Use real test set for evaluation rather than validation set")
 flags.DEFINE_boolean("debug", False, "Start new log/model/images rather than continuing from previous run")
 flags.DEFINE_integer("debugnum", -1, "Specify exact log/model/images number to use rather than incrementing from last. (Don't pass both this and --debug at the same time.)")
 
 flags.mark_flag_as_required("model")
+flags.mark_flag_as_required("method")
 flags.mark_flag_as_required("source")
 
 
@@ -46,8 +50,14 @@ def get_directory_names():
     """ Figure out the log and model directory names """
     prefix = FLAGS.source+"-"+FLAGS.target+"-"+FLAGS.model
 
-    if FLAGS.adapt:
-        prefix += "-da"
+    methods_suffix = {
+        "none": "",
+        "dann": "-dann",
+        "att": "-att",
+        "pseudo": "-pseudo",
+    }
+
+    prefix += methods_suffix[FLAGS.method]
 
     # Use the number specified on the command line (higher precedence than --debug)
     if FLAGS.debugnum >= 0:
@@ -77,8 +87,8 @@ def get_directory_names():
 
 @tf.function
 def train_step(data_a, data_b, model, opt, d_opt, source_domain, target_domain,
-        task_loss, domain_loss):
-    """ Compiled training step that we call many times """
+        task_loss, domain_loss, adapt):
+    """ Compiled DANN (or no adaptation) training step that we call many times """
     if data_a is not None:
         x_a, y_a = data_a
     if data_b is not None:
@@ -87,7 +97,7 @@ def train_step(data_a, data_b, model, opt, d_opt, source_domain, target_domain,
     # Concatenate for adaptation - concatenate source labels with all-zero
     # labels for target since we can't use the target labels during
     # unsupervised domain adaptation
-    if FLAGS.adapt:
+    if adapt:
         assert data_a is not None and data_b is not None, \
             "Adaptation requires both datasets A and B"
         x = tf.concat((x_a, x_b), axis=0)
@@ -106,23 +116,24 @@ def train_step(data_a, data_b, model, opt, d_opt, source_domain, target_domain,
         loss = task_loss(task_y_true, task_y_pred, training=True) + d_loss
 
     # Only update domain classifier during adaptation
-    if FLAGS.adapt:
-        trainable_vars = model.trainable_variables
+    if adapt:
+        trainable_vars = model.trainable_variables_task_domain
     else:
-        trainable_vars = model.trainable_variables_exclude_domain
+        trainable_vars = model.trainable_variables_task
 
     # Update model
     grad = tape.gradient(loss, trainable_vars)
     opt.apply_gradients(zip(grad, trainable_vars))
 
     # Update discriminator
-    if FLAGS.adapt:
+    if adapt:
         d_grad = d_tape.gradient(d_loss, model.domain_classifier.trainable_variables)
         d_opt.apply_gradients(zip(d_grad, model.domain_classifier.trainable_variables))
-    # if FLAGS.adapt:  # TODO try
+
+    # if adapt:  # TODO try
     #     for _ in range(FLAGS.max_domain_iters):
     #         with tf.GradientTape() as d_tape:
-    #             task_y_pred, domain_y_pred = model(x, grl_lambda=0.0, training=True)
+    #             task_y_pred, domain_y_pred = model(x, training=True)
     #             d_loss = domain_loss(domain_y_true, domain_y_pred)
 
     #         d_grad = d_tape.gradient(d_loss, model.domain_classifier.trainable_variables)
@@ -132,6 +143,45 @@ def train_step(data_a, data_b, model, opt, d_opt, source_domain, target_domain,
     #         domain_acc = compute_accuracy(domain_y_true, domain_y_pred)
     #         if domain_acc > FLAGS.min_domain_accuracy:
     #             break
+
+
+@tf.function
+def pseudo_label(x, model):
+    """ Compiled step for pseudo-labeling target data """
+    # Run target data through model, return the predictions and probability
+    # of being source data
+    # TODO also possible to weight updates to normal "task classifier" by the
+    # probability the data is *target* data (opposite of this, where here we
+    # look for data that it thinks is *source* data)
+    task_y_pred, domain_y_pred = model(x, training=True)
+
+    batch_size = tf.shape(domain_y_pred)[0]
+    domain_prob_source = tf.slice(domain_y_pred, [0, 0], [batch_size, 1])
+    domain_prob_target = tf.slice(domain_y_pred, [0, 1], [batch_size, 1])
+
+    return task_y_pred, domain_prob_source, domain_prob_target
+
+
+@tf.function
+def train_step_target(data_b, weights, model, opt, weighted_task_loss,
+        target_classifier):
+    """ Compiled train step for pseudo-labeled target data """
+    x, task_y_pseudo = data_b
+
+    # Run data through model and compute loss
+    with tf.GradientTape() as tape:
+        task_y_pred, domain_y_pred = model(x, target=target_classifier, training=True)
+        loss = weighted_task_loss(task_y_pseudo, task_y_pred, weights, training=True)
+
+    # Only update feature extractor and target classifier
+    if target_classifier:
+        trainable_vars = model.trainable_variables_target
+    else:
+        trainable_vars = model.trainable_variables_task
+
+    # Update model
+    grad = tape.gradient(loss, trainable_vars)
+    opt.apply_gradients(zip(grad, trainable_vars))
 
 
 def main(argv):
@@ -149,11 +199,14 @@ def main(argv):
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
 
+    # We adapt for any of the methods other than "none" (no adaptation)
+    adapt = FLAGS.method != "none"
+
     # For adaptation, we'll be concatenating together half source and half target
     # data, so to keep the batch_size about the same, we'll cut it in half
     train_batch = FLAGS.train_batch
 
-    if FLAGS.adapt:
+    if adapt:
         train_batch = train_batch // 2
 
     # Input training data
@@ -187,8 +240,9 @@ def main(argv):
     num_classes = source_dataset.num_classes
 
     # Loss functions
-    task_loss = models.make_task_loss(FLAGS.adapt)
-    domain_loss = models.make_domain_loss(FLAGS.adapt)
+    task_loss = models.make_task_loss(adapt)
+    domain_loss = models.make_domain_loss(adapt)
+    weighted_task_loss = models.make_weighted_loss()
 
     # Source domain will be [[1,0], [1,0], ...] and target domain [[0,1], [0,1], ...]
     source_domain = domain_labels(0, train_batch, num_domains)
@@ -203,18 +257,25 @@ def main(argv):
 
     # Optimizers
     opt = tf.keras.optimizers.Adam(FLAGS.lr)
-    d_opt = tf.keras.optimizers.Adam(FLAGS.lr*FLAGS.lr_mult)
+    d_opt = tf.keras.optimizers.Adam(FLAGS.lr*FLAGS.lr_domain_mult)
+
+    # Target classifier optimizer if target_classifier, otherwise the optimizer
+    # for the task-classifier when running on pseudo-labeled data
+    do_pseudo_labeling = FLAGS.method in ["att", "pseudo"]
+    has_target_classifier = do_pseudo_labeling and FLAGS.target_classifier
+    t_mult = FLAGS.lr_target_mult if has_target_classifier else FLAGS.lr_pseudo_mult
+    t_opt = tf.keras.optimizers.Adam(FLAGS.lr*t_mult)
 
     # Checkpoints
     checkpoint = tf.train.Checkpoint(
-        global_step=global_step, opt=opt, d_opt=d_opt, model=model)
+        global_step=global_step, opt=opt, d_opt=d_opt, t_opt=t_opt, model=model)
     checkpoint_manager = CheckpointManager(checkpoint, model_dir, log_dir)
     checkpoint_manager.restore_latest()
 
     # Metrics
-    have_target_domain = target_dataset is not None
+    has_target_domain = target_dataset is not None
     metrics = Metrics(log_dir, source_dataset, num_domains,
-        task_loss, domain_loss, have_target_domain)
+        task_loss, domain_loss, has_target_domain, has_target_classifier)
 
     # Start training
     for i in range(int(global_step), FLAGS.steps+1):
@@ -224,7 +285,23 @@ def main(argv):
 
         t = time.time()
         train_step(data_a, data_b, model, opt, d_opt,
-            source_domain, target_domain, task_loss, domain_loss)
+            source_domain, target_domain, task_loss, domain_loss, adapt)
+
+        if do_pseudo_labeling:
+            # We'll ignore the real labels, so just get the data
+            x, _ = data_b
+
+            # Pseudo-label target data
+            task_y_pred, domain_prob_source, _ = pseudo_label(x, model)
+
+            # Create new data with same input by pseudo-labels not true labels
+            data_b_pseudo = (x, task_y_pred)
+
+            # Train target classifier on pseudo-labeled data, weighted
+            # by probability that it's source data (i.e. higher confidence)
+            train_step_target(data_b_pseudo, domain_prob_source, model,
+                t_opt, weighted_task_loss, has_target_classifier)
+
         global_step.assign_add(1)
         t = time.time() - t
 

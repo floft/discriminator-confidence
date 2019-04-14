@@ -325,13 +325,29 @@ class DomainAdaptationModel(tf.keras.Model):
         self.task_classifier = task
         self.domain_classifier = domain
 
+        # Target classifier (if used) will be the same as the task classifier
+        # but will be trained on pseudo-labeled data. Then, call
+        # model(..., target=True) to use this classifier rather than the task
+        # classifier.
+        self.target_classifier = tf.keras.models.clone_model(task)
+
     @property
-    def trainable_variables_exclude_domain(self):
-        """ Same as .trainable_variables but excluding the domain classifier """
+    def trainable_variables_task(self):
         return self.feature_extractor.trainable_variables \
             + self.task_classifier.trainable_variables
 
-    def call(self, inputs, training=None, **kwargs):
+    @property
+    def trainable_variables_task_domain(self):
+        return self.feature_extractor.trainable_variables \
+            + self.task_classifier.trainable_variables \
+            + self.domain_classifier.trainable_variables
+
+    @property
+    def trainable_variables_target(self):
+        return self.feature_extractor.trainable_variables \
+            + self.target_classifier.trainable_variables
+
+    def call(self, inputs, target=False, training=None, **kwargs):
         # Manually set the learning phase since we probably aren't using .fit()
         if training is True:
             tf.keras.backend.set_learning_phase(1)
@@ -339,8 +355,14 @@ class DomainAdaptationModel(tf.keras.Model):
             tf.keras.backend.set_learning_phase(0)
 
         fe = self.feature_extractor(inputs, **kwargs)
-        task = self.task_classifier(fe, **kwargs)
         domain = self.domain_classifier(fe, **kwargs)
+
+        # If desired, use the target classifier rather than the task classifier
+        if target:
+            task = self.target_classifier(fe, **kwargs)
+        else:
+            task = self.task_classifier(fe, **kwargs)
+
         return task, domain
 
 
@@ -371,6 +393,20 @@ def make_task_loss(adapt):
             y_true = tf.slice(y_true, [0, 0], [batch_size // 2, -1])
 
         return cce(y_true, y_pred)
+
+    return task_loss
+
+
+def make_weighted_loss():
+    """ The same as CategoricalCrossentropy() but weighted """
+    cce = tf.keras.losses.CategoricalCrossentropy()
+
+    def task_loss(y_true, y_pred, weights, training=None):
+        """
+        Compute loss on the outputs of a classifier weighted by the specified
+        weights
+        """
+        return cce(y_true, y_pred, sample_weight=weights)
 
     return task_loss
 
