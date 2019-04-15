@@ -50,8 +50,8 @@ def to_numpy(value):
 
 
 def valid_split(images, labels, seed=None, validation_size=1000):
-    """ Split test data into validation/test as is commonly done, taking 1000
-    random samples for a validation set """
+    """ Split training data into train/valid as is commonly done, taking 1000
+    random (labeled, even if target domain) samples for a validation set """
     assert len(images) == len(labels), "len(images) != len(labels)"
     p = shuffle_together_calc(len(images), seed=seed)
     images = to_numpy(images)[p]
@@ -59,10 +59,10 @@ def valid_split(images, labels, seed=None, validation_size=1000):
 
     valid_images = images[:validation_size]
     valid_labels = labels[:validation_size]
-    test_images = images[validation_size:]
-    test_labels = labels[validation_size:]
+    train_images = images[validation_size:]
+    train_labels = labels[validation_size:]
 
-    return valid_images, valid_labels, test_images, test_labels
+    return valid_images, valid_labels, train_images, train_labels
 
 
 def save_adaptation(source, target, seed=0):
@@ -70,28 +70,28 @@ def save_adaptation(source, target, seed=0):
     source_dataset, target_dataset = datasets.load_da(source, target)
 
     source_valid_images, source_valid_labels, \
-        source_test_images, source_test_labels = \
-        valid_split(source_dataset.test_images, source_dataset.test_labels,
+        source_train_images, source_train_labels = \
+        valid_split(source_dataset.train_images, source_dataset.train_labels,
             seed=0)
 
     write(tfrecord_filename(source, target, source, "train"),
-        source_dataset.train_images, source_dataset.train_labels)
+        source_train_images, source_train_labels)
     write(tfrecord_filename(source, target, source, "valid"),
         source_valid_images, source_valid_labels)
     write(tfrecord_filename(source, target, source, "test"),
-        source_test_images, source_test_labels)
+        source_dataset.test_images, source_dataset.test_labels)
 
     target_valid_images, target_valid_labels, \
-        target_test_images, target_test_labels = \
-        valid_split(target_dataset.test_images, target_dataset.test_labels,
+        target_train_images, target_train_labels = \
+        valid_split(target_dataset.train_images, target_dataset.train_labels,
             seed=1)
 
     write(tfrecord_filename(source, target, target, "train"),
-        target_dataset.train_images, target_dataset.train_labels)
+        target_train_images, target_train_labels)
     write(tfrecord_filename(source, target, target, "valid"),
         target_valid_images, target_valid_labels)
     write(tfrecord_filename(source, target, target, "test"),
-        target_test_images, target_test_labels)
+        target_dataset.test_images, target_dataset.test_labels)
 
 
 if __name__ == "__main__":

@@ -201,6 +201,11 @@ def load_da(source_name, target_name, test=False, *args, **kwargs):
     if not test:
         source_test_filenames = source_valid_filenames
         target_test_filenames = target_valid_filenames
+    # If test=True, then make "train" consist of both training and validation
+    # data to match the original dataset.
+    else:
+        source_train_filenames += source_valid_filenames
+        target_train_filenames += target_valid_filenames
 
     # Create all the train, test, evaluation, ... tf.data.Dataset objects within
     # a Dataset() class that stores them
