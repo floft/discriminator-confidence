@@ -29,10 +29,13 @@ from tfrecord import write_tfrecord, tfrecord_filename
 
 
 def write(filename, x, y):
-    if not os.path.exists(filename):
-        write_tfrecord(filename, x, y)
+    if x is not None and y is not None:
+        if not os.path.exists(filename):
+            write_tfrecord(filename, x, y)
+        else:
+            print("Skipping:", filename, "(already exists)")
     else:
-        print("Skipping:", filename, "(already exists)")
+        print("Skipping:", filename, "(no data)")
 
 
 def shuffle_together_calc(length, seed=None):
@@ -102,8 +105,10 @@ if __name__ == "__main__":
         ("svhn2", "mnist2"),
         ("mnist", "mnistm"),
         ("synnumbers", "svhn"),
+        ("synsigns", "gtsrb"),
     ]
 
     # Save tfrecord files for each of the adaptation problems
     for source, target in adaptation_problems:
+        print("Adaptation from", source, "to", target)
         save_adaptation(source, target)

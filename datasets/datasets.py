@@ -12,6 +12,8 @@ import scipy.io
 import numpy as np
 import tensorflow as tf
 
+from PIL import Image
+
 
 class Dataset:
     """
@@ -94,18 +96,18 @@ class Dataset:
     def load(self):
         raise NotImplementedError("must implement load() for Dataset class")
 
-    def download_dataset(self, files_to_download, url, train_index=0, test_index=1):
+    def download_dataset(self, files_to_download, url):
         """
         Download url/file for file in files_to_download
-        Returns: the downloaded filename at train_index, test_index (e.g. 0 and 1,
-            if you passed the train filename first and test filename second).
+        Returns: the downloaded filenames for each of the files given
         """
         downloaded_files = []
+
         for f in files_to_download:
-            downloaded_files.append(tf.keras.utils.get_file(fname=f, origin=url+"/"+f))
-        train_fp = downloaded_files[train_index]
-        test_fp = downloaded_files[test_index]
-        return train_fp, test_fp
+            downloaded_files.append(tf.keras.utils.get_file(
+                fname=f, origin=url+"/"+f))
+
+        return downloaded_files
 
     def calculate_padding(self, input_size, desired_output_size):
         """ Calculate before/after padding to nearly center it, if odd then
@@ -154,6 +156,27 @@ class Dataset:
             assert squeezed.shape[1] == self.num_classes, "y.shape[1] != num_classes"
 
         return y
+
+    def get_image(self, content):
+        """ Use TensorFlow to decode the PNG images into a tensor """
+        return tf.io.decode_image(content)
+
+    def get_xy(self, images, labels):
+        """ Take an image and labels dictionaries and create x and y lists where
+        elements correspond """
+        x = []
+        y = []
+        keys = list(images.keys())
+        keys.sort()
+
+        for k in keys:
+            x.append(tf.expand_dims(images[k], 0))
+            y.append(labels[k])
+
+        x = np.vstack(x)
+        y = np.hstack(y)
+
+        return x, y
 
     def label_to_int(self, label_name):
         """ e.g. Bathe to 0 """
@@ -358,30 +381,11 @@ class MNISTM(Dataset):
             except ValueError:
                 raise ValueError("could not parse label as integer")
 
+            assert label >= 0 and label < self.num_classes, \
+                "0 <= label < num_classes"
             labels[name] = label
 
         return labels
-
-    def get_image(self, content):
-        """ Use TensorFlow to decode the PNG images into a tensor """
-        return tf.io.decode_image(content)
-
-    def get_xy(self, images, labels):
-        """ Take the image and labels dictionaries and create x and y lists where
-        elements correspond """
-        x = []
-        y = []
-        keys = list(images.keys())
-        keys.sort()
-
-        for k in keys:
-            x.append(tf.expand_dims(images[k], 0))
-            y.append(labels[k])
-
-        x = np.vstack(x)
-        y = np.hstack(y)
-
-        return x, y
 
 
 class SynNumbers(Dataset):
@@ -424,6 +428,250 @@ class SynNumbers(Dataset):
         return train_images, train_labels, test_images, test_labels
 
 
+class SynSigns(Dataset):
+    """ Load the SynSigns / traffic sign recognition with synthetic dataset """
+    num_classes = 43
+    class_labels = [str(x) for x in range(43)]  # No names given?
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(SynSigns.num_classes, SynSigns.class_labels,
+            *args, **kwargs)
+
+    def process(self, data, labels):
+        """ Convert to float, normalize to [-1,1] """
+        data = data.astype("float32")
+        data = (data - 127.5) / 127.5
+        labels = self.one_hot(labels)
+        return super().process(data, labels)
+
+    def load(self):
+        # Check that the compressed file exists
+        compressed = "synthetic_data.zip"
+
+        if not os.path.exists(compressed):
+            print("Download the 'Dataset' synthetic_data.zip from "
+                "http://graphics.cs.msu.ru/en/node/1337")
+
+        # Get data from the file
+        with zipfile.ZipFile(compressed, "r") as archive:
+            with archive.open("synthetic_data/train_labelling.txt") as fp:
+                train_labels = self.get_labels(fp.read())
+
+            train_images = {}
+
+            for name, label in train_labels.items():
+                with archive.open("synthetic_data/" + name) as fp:
+                    train_images[name] = self.get_image(fp.read())
+
+        assert len(train_images) == len(train_labels), \
+            "train_images and train_labels are of different sizes"
+
+        # Create x and y lists
+        train_x, train_y = self.get_xy(train_images, train_labels)
+
+        # Note: no test set
+        return train_x, train_y, None, None
+
+    def get_labels(self, content):
+        """ Read data in the format "image_name.png label_number something", one
+        per line, into a dictionary {"image_name.png": label_number, ...} """
+        labels = {}
+        lines = content.decode("utf-8").strip().split("\n")
+
+        for line in lines:
+            name, label, _ = line.split(" ")
+
+            try:
+                label = int(label)
+            except ValueError:
+                raise ValueError("could not parse label as integer")
+
+            assert label >= 0 and label < self.num_classes, \
+                "0 <= label < num_classes"
+            labels[name] = label
+
+        return labels
+
+
+class GTSRB(Dataset):
+    """ Load the GTSRB dataset """
+    num_classes = 43
+    class_labels = [str(x) for x in range(43)]  # No names given?
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(GTSRB.num_classes, GTSRB.class_labels, *args, **kwargs)
+
+    def download(self):
+        """ Download the GTSRB files from online """
+        train_fp, test_fp, test_labels_fp = self.download_dataset(
+            ["GTSRB_Final_Training_Images.zip", "GTSRB_Final_Test_Images.zip",
+                "GTSRB_Final_Test_GT.zip"],
+            "http://benchmark.ini.rub.de/Dataset/")
+        return train_fp, test_fp, test_labels_fp
+
+    def get_file_in_zip(self, archive, filename):
+        """ Read one file out of the already-open zip file """
+        with archive.open(filename) as fp:
+            contents = fp.read()
+        return contents
+
+    def get_image_in_zip(self, archive, filename):
+        """ Use PIL to open image (TensorFlow doesn't support ppm) and get a
+        numpy array """
+        with archive.open(filename) as fp:
+            return np.array(Image.open(fp))
+
+    def to_int(self, value):
+        """ Convert value to integer """
+        try:
+            value = int(value)
+        except ValueError:
+            raise ValueError("could not parse value as integer")
+        return value
+
+    def add_labels(self, label_data, content, prefix):
+        """ Parse label CSV file, add to label_data """
+        lines = content.decode("utf-8").strip().split("\n")
+
+        for line in lines:
+            filename, width, height, roiX1, roiY1, roiX2, roiY2, classId = \
+                line.split(";")
+
+            # Skip the first line
+            if filename == "Filename":
+                continue
+
+            width = self.to_int(width)
+            height = self.to_int(height)
+            roiX1 = self.to_int(roiX1)
+            roiY1 = self.to_int(roiY1)
+            roiX2 = self.to_int(roiX2)
+            roiY2 = self.to_int(roiY2)
+            classId = self.to_int(classId)
+
+            label_data[prefix + filename] = {
+                "width": width,
+                "height": height,
+                "roiX1": roiX1,
+                "roiY1": roiY1,
+                "roiX2": roiX2,
+                "roiY2": roiY2,
+                "classId": classId,
+            }
+
+    def load_train_file(self, filename):
+        # Indexed by folder/filename.ppm
+        image_data = {}
+        image_labels = {}
+        label_data = {}  # passed to self.add_labels that keeps adding more to it
+
+        with zipfile.ZipFile(filename, "r") as archive:
+            filelist = archive.namelist()
+
+            for f in filelist:
+                if "GTSRB/Final_Training/Images/" in f:
+                    folder, filename = os.path.split(
+                        f.replace("GTSRB/Final_Training/Images/", ""))
+
+                    if ".csv" in filename:
+                        contents = self.get_file_in_zip(archive, f)
+                        prefix = folder+"/"
+                        self.add_labels(label_data, contents, prefix)
+                    elif ".ppm" in filename:
+                        contents = self.get_image_in_zip(archive, f)
+                        label = self.to_int(folder)
+                        image_data[folder+"/"+filename] = contents
+                        image_labels[folder+"/"+filename] = label
+
+        # Combine all parts
+        x = []
+        y = []
+
+        for key, image_label in image_labels.items():
+            label_and_roi = label_data[key]
+            assert label_and_roi["classId"] == image_label, \
+                "CSV file and filename disagree on label"
+            image = self.crop_and_resize(image_data[key], label_and_roi)
+
+            x.append(tf.expand_dims(image, 0))
+            y.append(image_label)
+
+        x = np.vstack(x)
+        y = np.hstack(y)
+
+        return x, y
+
+    def load_test_file(self, filename, label_filename):
+        # Indexed by filename.ppm (no subfolders in test data)
+        image_data = {}
+        label_data = {}
+
+        # Test labels are in separate file, so load those first
+        with zipfile.ZipFile(label_filename, "r") as archive:
+            contents = self.get_file_in_zip(archive, "GT-final_test.csv")
+            self.add_labels(label_data, contents, "")
+
+        # Then get images
+        with zipfile.ZipFile(filename, "r") as archive:
+            filelist = archive.namelist()
+
+            for f in filelist:
+                if "GTSRB/Final_Test/Images/" in f:
+                    filename = os.path.basename(
+                        f.replace("GTSRB/Final_Test/Images/", ""))
+
+                    if ".ppm" in filename:
+                        contents = self.get_image_in_zip(archive, f)
+                        image_data[filename] = contents
+
+        # Combine all parts
+        x = []
+        y = []
+
+        for key, image in image_data.items():
+            label_and_roi = label_data[key]
+            image = self.crop_and_resize(image, label_and_roi)
+
+            x.append(tf.expand_dims(image, 0))
+            y.append(label_and_roi["classId"])
+
+        x = np.vstack(x)
+        y = np.hstack(y)
+
+        return x, y
+
+    def crop_and_resize(self, image, label_and_roi, size=[40, 40]):
+        """ Crop the image to the region of interest (ROI),
+        we resize it since if they are different sizes we can't store them in
+        a single numpy array / tensor """
+        # Crop
+        offset_height = label_and_roi["roiY1"]
+        offset_width = label_and_roi["roiX1"]
+        target_height = label_and_roi["roiY2"] - label_and_roi["roiY1"]
+        target_width = label_and_roi["roiX2"] - label_and_roi["roiX1"]
+        image = tf.image.crop_to_bounding_box(image,
+            offset_height, offset_width, target_height, target_width)
+
+        # Resize
+        image = tf.image.resize(image, size)
+
+        return image
+
+    def process(self, data, labels):
+        """ Convert to float, normalize to [-1,1] """
+        data = data.astype("float32")
+        data = (data - 127.5) / 127.5
+        labels = self.one_hot(labels)
+        return super().process(data, labels)
+
+    def load(self):
+        train_fp, test_fp, test_labels_fp = self.download()
+        train_images, train_labels = self.load_train_file(train_fp)
+        test_images, test_labels = self.load_test_file(test_fp, test_labels_fp)
+
+        return train_images, train_labels, test_images, test_labels
+
+
 # List of datasets
 datasets = {
     "mnist": MNIST,
@@ -433,6 +681,8 @@ datasets = {
     "svhn2": SVHN,  # just processed differently
     "mnistm": MNISTM,
     "synnumbers": SynNumbers,
+    "synsigns": SynSigns,
+    "gtsrb": GTSRB,
 }
 
 

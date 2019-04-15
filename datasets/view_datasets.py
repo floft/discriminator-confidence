@@ -18,6 +18,7 @@ FLAGS = flags.FLAGS
 
 flags.DEFINE_enum("source", None, datasets.names(), "What dataset to use as the source")
 flags.DEFINE_enum("target", "", [""]+datasets.names(), "What dataset to use as the target")
+flags.DEFINE_boolean("test", False, "Show test images instead of training images")
 flags.DEFINE_float("gpumem", 0.1, "Percentage of GPU memory to let TensorFlow use")
 
 flags.mark_flag_as_required("source")
@@ -59,9 +60,14 @@ def main(argv):
         source_dataset = datasets.load(FLAGS.source)
         target_dataset = None
 
-    source_data = source_dataset.train_images
-    target_data = target_dataset.train_images \
-        if target_dataset is not None else None
+    if not FLAGS.test:
+        source_data = source_dataset.train_images
+        target_data = target_dataset.train_images \
+            if target_dataset is not None else None
+    else:
+        source_data = source_dataset.test_images
+        target_data = target_dataset.test_images \
+            if target_dataset is not None else None
 
     display("Source", source_data)
 
