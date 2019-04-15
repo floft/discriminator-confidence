@@ -15,6 +15,9 @@ same data):
 We do this because otherwise for some domains like SynNumbers to SVHN we use
 nearly all of my 32 GiB of RAM just loading the datasets and it takes a while
 as well.
+
+Note: probably want to run this prefixed with CUDA_VISIBLE_DEVICES= so that it
+doesn't use the GPU (if you're running other jobs).
 """
 import os
 import numpy as np
@@ -96,6 +99,7 @@ if __name__ == "__main__":
     adaptation_problems = [
         ("mnist", "usps"),
         ("svhn", "mnist"),
+        ("svhn2", "mnist2"),
         ("mnist", "mnistm"),
         ("synnumbers", "svhn"),
     ]

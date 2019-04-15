@@ -415,8 +415,10 @@ class SynNumbers(Dataset):
 # List of datasets
 datasets = {
     "mnist": MNIST,
+    "mnist2": MNIST,  # just processed differently
     "usps": USPS,
     "svhn": SVHN,
+    "svhn2": SVHN,  # just processed differently
     "mnistm": MNISTM,
     "synnumbers": SynNumbers,
 }
@@ -462,6 +464,18 @@ def load_da(source_name, target_name, *args, **kwargs):
         target_dataset = load(target_name, *args, **kwargs)
     elif target_name == "mnist" and source_name == "svhn":
         source_dataset = load(source_name, *args, **kwargs)
+        target_dataset = load(target_name, *args, pad_to=[32, 32], pad_const=-1,
+            convert_to_rgb=True, **kwargs)
+
+    # MNIST <-> SVHN: I think often times SVHN is converted to grayscale, so
+    # try that and see if it's any easier. (Self-ensembling paper said that
+    # converting to RGB made it harder.)
+    elif source_name == "mnist2" and target_name == "svhn2":
+        source_dataset = load(source_name, *args, pad_to=[32, 32], pad_const=-1,
+            **kwargs)
+        target_dataset = load(target_name, *args, convert_to_gray=True, **kwargs)
+    elif target_name == "mnist2" and source_name == "svhn2":
+        source_dataset = load(source_name, *args, convert_to_gray=True, **kwargs)
         target_dataset = load(target_name, *args, pad_to=[32, 32], pad_const=-1,
             convert_to_rgb=True, **kwargs)
 
