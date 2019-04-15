@@ -165,44 +165,54 @@ def make_dann_mnist_model(num_classes, num_domains, global_step, grl_schedule):
 def make_dann_svhn_model(num_classes, num_domains, global_step, grl_schedule):
     """ Figure 4(b) SVHN architecture -- Ganin et al. DANN JMLR 2016 paper """
     dropout = FLAGS.dropout
-    weight_decay = 0.01
 
     feature_extractor = tf.keras.Sequential([
-        tf.keras.layers.Conv2D(64, (5, 5), (1, 1), "same", activation="relu"),
+        tf.keras.layers.Conv2D(64, (5, 5), (1, 1), "same"),
+        tf.keras.layers.BatchNormalization(),
+        tf.keras.layers.ReLU(),
+
         tf.keras.layers.MaxPool2D((3, 3), (2, 2), "same"),
-        tf.keras.layers.Conv2D(64, (5, 5), (1, 1), "same", activation="relu"),
+        tf.keras.layers.Dropout(dropout),
+
+        tf.keras.layers.Conv2D(64, (5, 5), (1, 1), "same"),
+        tf.keras.layers.BatchNormalization(),
+        tf.keras.layers.ReLU(),
+
         tf.keras.layers.MaxPool2D((3, 3), (2, 2), "same"),
-        tf.keras.layers.Conv2D(128, (5, 5), (1, 1), "same", activation="relu"),
+        tf.keras.layers.Dropout(dropout),
+
+        tf.keras.layers.Conv2D(128, (5, 5), (1, 1), "same"),
+        tf.keras.layers.BatchNormalization(),
+        tf.keras.layers.ReLU(),
+
         tf.keras.layers.Flatten(),
     ])
     task_classifier = tf.keras.Sequential([
+        tf.keras.layers.Dense(3072),
+        tf.keras.layers.BatchNormalization(),
+        tf.keras.layers.ReLU(),
         tf.keras.layers.Dropout(dropout),
-        tf.keras.layers.Dense(3072, "relu",
-            kernel_regularizer=tf.keras.regularizers.l2(weight_decay),
-            bias_regularizer=tf.keras.regularizers.l2(weight_decay)),
+
+        tf.keras.layers.Dense(2048),
+        tf.keras.layers.BatchNormalization(),
+        tf.keras.layers.ReLU(),
         tf.keras.layers.Dropout(dropout),
-        tf.keras.layers.Dense(2048, "relu",
-            kernel_regularizer=tf.keras.regularizers.l2(weight_decay),
-            bias_regularizer=tf.keras.regularizers.l2(weight_decay)),
-        tf.keras.layers.Dropout(dropout),
-        tf.keras.layers.Dense(num_classes, "softmax",
-            kernel_regularizer=tf.keras.regularizers.l2(weight_decay),
-            bias_regularizer=tf.keras.regularizers.l2(weight_decay)),
+
+        tf.keras.layers.Dense(num_classes, "softmax"),
     ])
     domain_classifier = tf.keras.Sequential([
         FlipGradient(global_step, grl_schedule),
+        tf.keras.layers.Dense(1024),
+        tf.keras.layers.BatchNormalization(),
+        tf.keras.layers.ReLU(),
         tf.keras.layers.Dropout(dropout),
-        tf.keras.layers.Dense(1024, "relu",
-            kernel_regularizer=tf.keras.regularizers.l2(weight_decay),
-            bias_regularizer=tf.keras.regularizers.l2(weight_decay)),
+
+        tf.keras.layers.Dense(1024),
+        tf.keras.layers.BatchNormalization(),
+        tf.keras.layers.ReLU(),
         tf.keras.layers.Dropout(dropout),
-        tf.keras.layers.Dense(1024, "relu",
-            kernel_regularizer=tf.keras.regularizers.l2(weight_decay),
-            bias_regularizer=tf.keras.regularizers.l2(weight_decay)),
-        tf.keras.layers.Dropout(dropout),
-        tf.keras.layers.Dense(num_domains, "softmax",
-            kernel_regularizer=tf.keras.regularizers.l2(weight_decay),
-            bias_regularizer=tf.keras.regularizers.l2(weight_decay)),  # they used 1 logistic
+
+        tf.keras.layers.Dense(num_domains, "softmax"),  # they used 1 logistic
     ])
     return feature_extractor, task_classifier, domain_classifier
 
