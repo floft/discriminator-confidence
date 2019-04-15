@@ -32,7 +32,8 @@ def display(name, images, max_number=16):
         channels = image.shape[2]
 
         if i == 0:
-            print(name, "shape", image.shape)
+            print(name, "shape", image.shape, "min", image.min(),
+                "max", image.max(), "mean", image.mean())
 
         if channels == 1:
             plt.imshow(image[:, :, 0] * 127.5 + 127.5, cmap='gray')
