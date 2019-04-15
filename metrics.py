@@ -43,6 +43,10 @@ class Metrics:
     after all (or just the one) batches are processed, saving this to a log file
     for viewing in TensorBoard.
 
+    Note: enable_compile=True decorates some functions with tf.function, but when
+    only evaluating once this can drastically increase the run time. Thus, set
+    to enable_compile=False when only evaluating the metrics once.
+
     Accuracy values:
         accuracy_{domain,task}/{source,target}/{training,validation}
         {auc,precision,recall}_{task,target}/{source,target}/{training,validation}
@@ -53,7 +57,7 @@ class Metrics:
     """
     def __init__(self, log_dir, source_dataset, num_domains,
             task_loss, domain_loss, target_domain=True,
-            target_classifier=False):
+            target_classifier=False, enable_compile=True):
         self.writer = tf.summary.create_file_writer(log_dir)
         self.source_dataset = source_dataset
         self.num_classes = source_dataset.num_classes
@@ -121,6 +125,12 @@ class Metrics:
         self.loss_total = tf.keras.metrics.Mean(name="loss/total")
         self.loss_task = tf.keras.metrics.Mean(name="loss/task")
         self.loss_domain = tf.keras.metrics.Mean(name="loss/domain")
+
+        # Compile frequent-running functions if the metrics will be updated
+        # multiple times
+        if enable_compile:
+            self._run_single_batch_task = tf.function(self._run_single_batch_task)
+            self._run_single_batch_target = tf.function(self._run_single_batch_target)
 
     def _reset_states(self, dataset):
         """ Reset states of all the Keras metrics """
@@ -236,26 +246,34 @@ class Metrics:
         """ Run all the data A/B through the model -- data_a and data_b
         should both be of type tf.data.Dataset """
         if data_a is not None:
-            self._run_multi_batch(data_a, model, 0, "source", dataset, target)
+            self._run_multi_batch(data_a, model, 0, "source", dataset, target=target)
 
         if self.target_domain and data_b is not None:
-            self._run_multi_batch(data_b, model, 1, "target", dataset, target)
+            self._run_multi_batch(data_b, model, 1, "target", dataset, target=target)
 
     def _run_batch(self, model, data_a, data_b, dataset, target):
         """ Run a single batch of A/B data through the model -- data_a and data_b
         should both be a tuple of (x, task_y_true) """
         if data_a is not None:
-            self._run_single_batch(*data_a, model, 0, "source", dataset, target)
+            if target:
+                self._run_single_batch_target(*data_a, model, 0, "source", dataset)
+            else:
+                self._run_single_batch_task(*data_a, model, 0, "source", dataset)
 
         if self.target_domain and data_b is not None:
-            self._run_single_batch(*data_b, model, 1, "target", dataset, target)
+            if target:
+                self._run_single_batch_target(*data_b, model, 1, "target", dataset)
+            else:
+                self._run_single_batch_task(*data_b, model, 1, "target", dataset)
 
-    def _run_multi_batch(self, data, *args, **kwargs):
+    def _run_multi_batch(self, data, *args, target=False, **kwargs):
         """ Evaluate model on all batches in the data (data is a tf.data.Dataset) """
         for x, task_y_true in data:
-            self._run_single_batch(x, task_y_true, *args, **kwargs)
+            if target:
+                self._run_single_batch_target(x, task_y_true, *args, **kwargs)
+            else:
+                self._run_single_batch_task(x, task_y_true, *args, **kwargs)
 
-    @tf.function
     def _run_single_batch(self, x, task_y_true, model, domain_num,
             domain_name, dataset_name, target):
         """
@@ -297,6 +315,18 @@ class Metrics:
         # Only log losses on training data with the task classifier (not target)
         if dataset_name == "training" and not target:
             self._process_losses(results)
+
+    # Compile separate _run_single_batch functions since if we pass in varying
+    # values of target=True/False it ends up dying with the error:
+    #   "ValueError: tf.function-decorated function tried to create variables on
+    #   non-first call."
+    #@tf.function  # optional -- see __init__()
+    def _run_single_batch_task(self, *args, **kwargs):
+        return self._run_single_batch(*args, target=False, **kwargs)
+
+    #@tf.function  # optional -- see __init__()
+    def _run_single_batch_target(self, *args, **kwargs):
+        return self._run_single_batch(*args, target=True, **kwargs)
 
     def train(self, model, data_a, data_b, step=None, train_time=None, evaluation=False):
         """
