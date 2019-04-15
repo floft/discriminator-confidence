@@ -38,6 +38,7 @@ flags.DEFINE_integer("shuffle_buffer", 60000, "Dataset shuffle buffer size")
 flags.DEFINE_integer("prefetch_buffer", 1, "Dataset prefetch buffer size")
 flags.DEFINE_integer("eval_shuffle_seed", 0, "Evaluation shuffle seed for repeatability")
 flags.DEFINE_integer("eval_max_examples", 0, "Max number of examples to evaluate for validation (default 0, i.e. all)")
+flags.DEFINE_boolean("train_on_source_valid", True, "Train on source validation data for small training sets (and in this case, don't draw much from the number)")
 
 
 class Dataset:
@@ -205,6 +206,14 @@ def load_da(source_name, target_name, test=False, *args, **kwargs):
     if not test:
         source_test_filenames = source_valid_filenames
         target_test_filenames = target_valid_filenames
+
+        # However, also train on the source "valid" data since we don't actually
+        # care about those numbers much and some datasets like Office are really
+        # small.
+        if FLAGS.train_on_source_valid:
+            source_train_filenames += source_valid_filenames
+            print("Warning: training on source \"valid\" data")
+
     # If test=True, then make "train" consist of both training and validation
     # data to match the original dataset.
     else:
