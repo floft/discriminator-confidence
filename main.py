@@ -269,7 +269,8 @@ def main(argv):
     # Checkpoints
     checkpoint = tf.train.Checkpoint(
         global_step=global_step, opt=opt, d_opt=d_opt, t_opt=t_opt, model=model)
-    checkpoint_manager = CheckpointManager(checkpoint, model_dir, log_dir)
+    checkpoint_manager = CheckpointManager(checkpoint, model_dir, log_dir,
+        target=has_target_classifier)
     checkpoint_manager.restore_latest()
 
     # Metrics
@@ -314,15 +315,16 @@ def main(argv):
 
         validation_accuracy = None
         if i%FLAGS.log_val_steps == 0:
-            validation_accuracy = metrics.test(model,
-                source_dataset_eval, target_dataset_eval, global_step)
+            validation_accuracy, target_validation_accuracy = metrics.test(
+                model, source_dataset_eval, target_dataset_eval, global_step)
 
         # Checkpoints -- Save either if at the right model step or if we found
         # a new validation accuracy. If this is better than the previous best
         # model, we need to make a new checkpoint so we can restore from this
         # step with the best accuracy.
         if i%FLAGS.model_steps == 0 or validation_accuracy is not None:
-            checkpoint_manager.save(int(global_step-1), validation_accuracy)
+            checkpoint_manager.save(int(global_step-1), validation_accuracy,
+                target_validation_accuracy)
 
     # We're done -- used for hyperparameter tuning
     write_finished(log_dir)

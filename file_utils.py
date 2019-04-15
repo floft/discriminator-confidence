@@ -55,12 +55,12 @@ def last_modified(dir_name, glob):
     return None
 
 
-def get_best_valid_accuracy(log_dir):
+def get_best_valid_accuracy(log_dir, filename="best_valid_accuracy.txt"):
     """
     Read in the best validation accuracy from the best_valid_accuracy.txt file
     in the log_dir, if it exists. If it doesn't, return None.
     """
-    filename = os.path.join(log_dir, "best_valid_accuracy.txt")
+    filename = os.path.join(log_dir, filename)
 
     if os.path.exists(filename):
         with open(filename, "r") as f:
@@ -73,12 +73,24 @@ def get_best_valid_accuracy(log_dir):
     return None
 
 
-def write_best_valid_accuracy(log_dir, accuracy):
+def get_best_target_valid_accuracy(log_dir):
+    """ Best accuracy based on target classifier """
+    return get_best_valid_accuracy(log_dir, "best_target_valid_accuracy.txt")
+
+
+def write_best_valid_accuracy(log_dir, accuracy,
+        filename="best_valid_accuracy.txt"):
     """ Write the best validation accuracy to a file """
-    filename = os.path.join(log_dir, "best_valid_accuracy.txt")
+    filename = os.path.join(log_dir, filename)
 
     with open(filename, "w") as f:
         f.write(str(accuracy))
+
+
+def write_best_target_valid_accuracy(log_dir, accuracy):
+    """ Write best accuracy based on target classifier """
+    return write_best_valid_accuracy(log_dir, accuracy,
+        "best_target_valid_accuracy.txt")
 
 
 def get_finished(log_dir):

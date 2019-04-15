@@ -37,6 +37,7 @@ methods = ["none", "dann", "att", "pseudo"]
 flags.DEFINE_string("modeldir", "models", "Directory for saving model files")
 flags.DEFINE_string("logdir", "logs", "Directory for saving log files")
 flags.DEFINE_boolean("target_classifier", True, "Use separate target classifier in ATT or Pseudo[-labeling] methods")
+flags.DEFINE_boolean("best_target", True, "If target_classifier, then pick best model based on target classifier accuracy (not task classifier accuracy)")
 # Specifid for evaluation
 flags.DEFINE_float("gpumem", 0.8, "Percentage of GPU memory to let TensorFlow use (divided among jobs)")
 flags.DEFINE_string("match", "*-*-*", "String matching to determine which logs/models to process")
@@ -256,18 +257,27 @@ def process_model(log_dir, model_dir, source, target, model_name, method_name,
     model = DomainAdaptationModel(num_classes, num_domains, model_name,
         global_step, num_steps)
 
+    # Does this method use a target classifier?
+    do_pseudo_labeling = method_name in ["att", "pseudo"]
+    has_target_classifier = do_pseudo_labeling and FLAGS.target_classifier
+
     # Load model from checkpoint
     checkpoint = tf.train.Checkpoint(model=model)
-    checkpoint_manager = CheckpointManager(checkpoint, model_dir, log_dir)
+    checkpoint_manager = CheckpointManager(checkpoint, model_dir, log_dir,
+        target=has_target_classifier)
 
     if FLAGS.last:
         checkpoint_manager.restore_latest()
         max_accuracy_step = checkpoint_manager.latest_step()
         max_accuracy = 0  # We don't really care...
     else:
-        checkpoint_manager.restore_best()
-        max_accuracy_step = checkpoint_manager.best_step()
-        max_accuracy = checkpoint_manager.best_validation
+        checkpoint_manager.restore_best(FLAGS.best_target)
+        max_accuracy_step = checkpoint_manager.best_step(FLAGS.best_target)
+
+        if FLAGS.best_target:
+            max_accuracy = checkpoint_manager.best_target_validation
+        else:
+            max_accuracy = checkpoint_manager.best_validation
 
     # Print which step we're loading the model for
     print(source + "," + target + "," + method_name + "," + model_name + ","
@@ -278,10 +288,6 @@ def process_model(log_dir, model_dir, source, target, model_name, method_name,
         return source, target, model_name, method_name, \
             None, None, None, None, \
             None, None, None, None
-
-    # Does this method use a target classifier?
-    do_pseudo_labeling = method_name in ["att", "pseudo"]
-    has_target_classifier = do_pseudo_labeling and FLAGS.target_classifier
 
     # Metrics
     have_target_domain = target_dataset is not None

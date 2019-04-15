@@ -394,16 +394,29 @@ class Metrics:
         # is tuning based on 1000 random labeled target samples.
         if FLAGS.best_source:
             acc = self.batch_metrics["validation"]["accuracy_task/source/validation"]
+
+            if self.has_target_classifier:
+                target_acc = self.batch_metrics["validation"]["accuracy_target/source/validation"]
         else:
             acc = self.batch_metrics["validation"]["accuracy_task/target/validation"]
+
+            if self.has_target_classifier:
+                target_acc = self.batch_metrics["validation"]["accuracy_target/target/validation"]
+
         validation_accuracy = float(acc.result())
+
+        if self.has_target_classifier:
+            target_validation_accuracy = float(target_acc.result())
 
         if not evaluation:
             assert step is not None, "Must pass step to test() if evaluation=False"
             step = int(step)
             self._write_data(step, dataset, t)
 
-        return validation_accuracy
+        if self.has_target_classifier:
+            return validation_accuracy, target_validation_accuracy
+        else:
+            return validation_accuracy, 0
 
     def results(self):
         """ Returns one dictionary of all the current metric results (floats) """
