@@ -76,8 +76,20 @@ class Dataset:
 
         # Load the dataset
         train_images, train_labels, test_images, test_labels = self.load()
-        self.train_images, self.train_labels = self.process(train_images, train_labels)
-        self.test_images, self.test_labels = self.process(test_images, test_labels)
+
+        if train_images is not None and train_labels is not None:
+            self.train_images, self.train_labels = \
+                self.process(train_images, train_labels)
+        else:
+            self.train_images = None
+            self.train_labels = None
+
+        if test_images is not None and test_labels is not None:
+            self.test_images, self.test_labels = \
+                self.process(test_images, test_labels)
+        else:
+            self.test_images = None
+            self.test_labels = None
 
     def load(self):
         raise NotImplementedError("must implement load() for Dataset class")

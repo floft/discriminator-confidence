@@ -186,16 +186,20 @@ def load_da(source_name, target_name, test=False, *args, **kwargs):
 
     # Get dataset tfrecord filenames
     def _path(filename):
-        """ Files are in datasets/ subdirectory """
-        return os.path.join("datasets", filename)
+        """ Files are in datasets/ subdirectory. If the file exists, return it
+        as an array since we may sometimes want more than one file for a
+        dataset. If it doesn't exist, ignore it (some datasets don't have a test
+        set for example)."""
+        fn = os.path.join("datasets", filename)
+        return [fn] if os.path.exists(fn) else []
 
     names = (source_name, target_name)
-    source_train_filenames = [_path(tfrecord_filename(*names, source_name, "train"))]
-    source_valid_filenames = [_path(tfrecord_filename(*names, source_name, "valid"))]
-    source_test_filenames = [_path(tfrecord_filename(*names, source_name, "test"))]
-    target_train_filenames = [_path(tfrecord_filename(*names, target_name, "train"))]
-    target_valid_filenames = [_path(tfrecord_filename(*names, target_name, "valid"))]
-    target_test_filenames = [_path(tfrecord_filename(*names, target_name, "test"))]
+    source_train_filenames = _path(tfrecord_filename(*names, source_name, "train"))
+    source_valid_filenames = _path(tfrecord_filename(*names, source_name, "valid"))
+    source_test_filenames = _path(tfrecord_filename(*names, source_name, "test"))
+    target_train_filenames = _path(tfrecord_filename(*names, target_name, "train"))
+    target_valid_filenames = _path(tfrecord_filename(*names, target_name, "valid"))
+    target_test_filenames = _path(tfrecord_filename(*names, target_name, "test"))
 
     # By default use validation data as the "test" data, unless test=True
     if not test:
