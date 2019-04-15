@@ -477,7 +477,7 @@ def load_da(source_name, target_name, *args, **kwargs):
     elif target_name == "mnist2" and source_name == "svhn2":
         source_dataset = load(source_name, *args, convert_to_gray=True, **kwargs)
         target_dataset = load(target_name, *args, pad_to=[32, 32], pad_const=-1,
-            convert_to_rgb=True, **kwargs)
+            **kwargs)
 
     # No conversions, resizes, etc.
     else:

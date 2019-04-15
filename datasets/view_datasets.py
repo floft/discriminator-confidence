@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """
 As a sanity check, load the data from the source/target domains and display it
+
+Note: probably want to run this prefixed with CUDA_VISIBLE_DEVICES= so that it
+doesn't use the GPU (if you're running other jobs).
 """
 import tensorflow as tf
 import matplotlib.pyplot as plt
