@@ -17,15 +17,28 @@ nearly all of my 32 GiB of RAM just loading the datasets and it takes a while
 as well.
 
 Note: probably want to run this prefixed with CUDA_VISIBLE_DEVICES= so that it
-doesn't use the GPU (if you're running other jobs).
+doesn't use the GPU (if you're running other jobs). Does this by default if
+parallel=True since otherwise it'll error.
 """
 import os
+import sys
 import numpy as np
 import tensorflow as tf
 
+from absl import app
+from absl import flags
+
 import datasets
 
+# Hack to import from ../pool.py
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+from pool import run_job_pool
 from tfrecord import write_tfrecord, tfrecord_filename
+
+FLAGS = flags.FLAGS
+
+flags.DEFINE_boolean("parallel", True, "Run multiple in parallel")
+flags.DEFINE_integer("cores", 0, "Cores to use if parallel, 0 = # of CPU cores")
 
 
 def write(filename, x, y):
@@ -70,6 +83,8 @@ def valid_split(images, labels, seed=None, validation_size=1000):
 
 def save_adaptation(source, target, seed=0):
     """ Save single source-target pair datasets """
+    print("Adaptation from", source, "to", target)
+
     source_dataset, target_dataset = datasets.load_da(source, target)
 
     source_valid_images, source_valid_labels, \
@@ -97,7 +112,7 @@ def save_adaptation(source, target, seed=0):
         target_dataset.test_images, target_dataset.test_labels)
 
 
-if __name__ == "__main__":
+def main(argv):
     # Only list one direction since the other direction uses the same data
     adaptation_problems = [
         ("mnist", "usps"),
@@ -109,6 +124,22 @@ if __name__ == "__main__":
     ]
 
     # Save tfrecord files for each of the adaptation problems
-    for source, target in adaptation_problems:
-        print("Adaptation from", source, "to", target)
-        save_adaptation(source, target)
+    if FLAGS.parallel:
+        # TensorFlow will error from all processes trying to use ~90% of the
+        # GPU memory on all parallel jobs, which will fail, so do this on the
+        # CPU.
+        os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
+        if FLAGS.cores == 0:
+            cores = None
+        else:
+            cores = FLAGS.cores
+
+        run_job_pool(save_adaptation, adaptation_problems, cores=cores)
+    else:
+        for source, target in adaptation_problems:
+            save_adaptation(source, target)
+
+
+if __name__ == "__main__":
+    app.run(main)
