@@ -296,6 +296,23 @@ def make_vada_model(num_classes, num_domains, global_step, grl_schedule,
     return feature_extractor, task_classifier, domain_classifier
 
 
+def make_resnet50_model(num_classes, num_domains, global_step, grl_schedule):
+    """ ResNet50 pre-trained on ImageNet -- for use with Office-31 datasets
+    Input should be 224x224x3 """
+    feature_extractor = tf.keras.applications.ResNet50(
+        include_top=False, pooling="avg")
+    task_classifier = tf.keras.Sequential([
+        tf.keras.layers.Flatten(),
+        tf.keras.layers.Dense(num_classes, "softmax"),
+    ])
+    domain_classifier = tf.keras.Sequential([
+        FlipGradient(global_step, grl_schedule),
+        tf.keras.layers.Flatten(),
+        tf.keras.layers.Dense(num_domains, "softmax"),  # or 1 sigmoid
+    ])
+    return feature_extractor, task_classifier, domain_classifier
+
+
 class DomainAdaptationModel(tf.keras.Model):
     """
     Domain adaptation model -- task and domain classifier outputs, depends on
@@ -328,6 +345,8 @@ class DomainAdaptationModel(tf.keras.Model):
             fe, task, domain = make_vada_model(*args, small=True)
         elif model_name == "vada_large":
             fe, task, domain = make_vada_model(*args, small=False)
+        elif model_name == "resnet50":
+            fe, task, domain = make_resnet50_model(*args)
         else:
             raise NotImplementedError("Model name: "+str(model_name))
 
@@ -453,6 +472,7 @@ models = [
     "dann_gtsrb",
     "vada_small",
     "vada_large",
+    "resnet50",
 ]
 
 
