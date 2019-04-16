@@ -689,9 +689,8 @@ class OfficeBase(Dataset):
             *args, **kwargs)
 
     def process(self, data, labels):
-        """ Normalize, float """
-        data = data.astype("float32")
-        data = (data - 127.5) / 127.5
+        """ ResNet50 model weights were from Caffe, so normalized differently """
+        data = tf.keras.applications.resnet50.preprocess_input(data)
         labels = self.one_hot(labels)
         return super().process(data, labels)
 

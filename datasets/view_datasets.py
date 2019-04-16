@@ -22,7 +22,7 @@ flags.DEFINE_boolean("test", False, "Show test images instead of training images
 flags.mark_flag_as_required("source")
 
 
-def display(name, images, max_number=16):
+def display(name, images, max_number=16, office=False):
     fig = plt.figure(figsize=(4, 4))
     fig.suptitle(name)
 
@@ -34,7 +34,9 @@ def display(name, images, max_number=16):
             print(name, "shape", image.shape, "min", image.min(),
                 "max", image.max(), "mean", image.mean())
 
-        if channels == 1:
+        if office:
+            plt.imshow(image[:, :, 0])
+        elif channels == 1:
             plt.imshow(image[:, :, 0] * 127.5 + 127.5, cmap='gray')
         elif channels == 3:
             plt.imshow(tf.cast(image[:, :, :] * 127.5 + 127.5, tf.int32))
@@ -64,10 +66,10 @@ def main(argv):
         target_data = target_dataset.test_images \
             if target_dataset is not None else None
 
-    display("Source", source_data)
+    display("Source", source_data, office="office_" in FLAGS.source)
 
     if target_dataset is not None:
-        display("Target", target_data)
+        display("Target", target_data, office="office_" in FLAGS.target)
 
     plt.show()
 
