@@ -95,9 +95,9 @@ class CheckpointManager:
         """ Return the step number from the best checkpoint. Returns None if
         no checkpoints. """
         if target and self.target:
-            return self._get_step_from_manager(self.best_manager)
-        else:
             return self._get_step_from_manager(self.best_target_manager)
+        else:
+            return self._get_step_from_manager(self.best_manager)
 
     def _get_step_from_manager(self, manager):
         # If no checkpoints found

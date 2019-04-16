@@ -274,7 +274,7 @@ def process_model(log_dir, model_dir, source, target, model_name, method_name,
         checkpoint_manager.restore_best(FLAGS.best_target)
         max_accuracy_step = checkpoint_manager.best_step(FLAGS.best_target)
 
-        if FLAGS.best_target:
+        if has_target_classifier and FLAGS.best_target:
             max_accuracy = checkpoint_manager.best_target_validation
         else:
             max_accuracy = checkpoint_manager.best_validation
