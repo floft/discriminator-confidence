@@ -38,7 +38,7 @@ from tfrecord import write_tfrecord, tfrecord_filename
 FLAGS = flags.FLAGS
 
 flags.DEFINE_boolean("parallel", True, "Run multiple in parallel")
-flags.DEFINE_integer("cores", 0, "Cores to use if parallel, 0 = # of CPU cores")
+flags.DEFINE_integer("jobs", 0, "Parallel jobs (if parallel=True), 0 = # of CPU cores")
 
 
 def write(filename, x, y):
@@ -81,36 +81,31 @@ def valid_split(images, labels, seed=None, validation_size=1000):
     return valid_images, valid_labels, train_images, train_labels
 
 
+def save_one(source, target, dataset_name, dataset, seed):
+    """ Save single dataset """
+    valid_images, valid_labels, \
+        train_images, train_labels = \
+        valid_split(dataset.train_images, dataset.train_labels,
+            seed=seed)
+
+    write(tfrecord_filename(source, target, dataset_name, "train"),
+        train_images, train_labels)
+    write(tfrecord_filename(source, target, dataset_name, "valid"),
+        valid_images, valid_labels)
+    write(tfrecord_filename(source, target, dataset_name, "test"),
+        dataset.test_images, dataset.test_labels)
+
+
 def save_adaptation(source, target, seed=0):
     """ Save single source-target pair datasets """
     print("Adaptation from", source, "to", target)
 
     source_dataset, target_dataset = datasets.load_da(source, target)
 
-    source_valid_images, source_valid_labels, \
-        source_train_images, source_train_labels = \
-        valid_split(source_dataset.train_images, source_dataset.train_labels,
-            seed=0)
-
-    write(tfrecord_filename(source, target, source, "train"),
-        source_train_images, source_train_labels)
-    write(tfrecord_filename(source, target, source, "valid"),
-        source_valid_images, source_valid_labels)
-    write(tfrecord_filename(source, target, source, "test"),
-        source_dataset.test_images, source_dataset.test_labels)
+    save_one(source, target, source, source_dataset, seed=0)
 
     if target is not None:
-        target_valid_images, target_valid_labels, \
-            target_train_images, target_train_labels = \
-            valid_split(target_dataset.train_images, target_dataset.train_labels,
-                    seed=1)
-
-        write(tfrecord_filename(source, target, target, "train"),
-            target_train_images, target_train_labels)
-        write(tfrecord_filename(source, target, target, "valid"),
-            target_valid_images, target_valid_labels)
-        write(tfrecord_filename(source, target, target, "test"),
-            target_dataset.test_images, target_dataset.test_labels)
+        save_one(source, target, target, target_dataset, seed=1)
 
 
 def main(argv):
@@ -135,10 +130,10 @@ def main(argv):
         # CPU.
         os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
-        if FLAGS.cores == 0:
+        if FLAGS.jobs == 0:
             cores = None
         else:
-            cores = FLAGS.cores
+            cores = FLAGS.jobs
 
         run_job_pool(save_adaptation, adaptation_problems, cores=cores)
     else:
