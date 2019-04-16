@@ -2,15 +2,14 @@
 """
 As a sanity check, load the data from the source/target domains and display it
 
-Note: probably want to run this prefixed with CUDA_VISIBLE_DEVICES= so that it
-doesn't use the GPU (if you're running other jobs).
+Note: sets CUDA_VISIBLE_DEVICES= so that it doesn't use the GPU.
 """
+import os
 import tensorflow as tf
 import matplotlib.pyplot as plt
 
 from absl import app
 from absl import flags
-from tensorflow.python.framework import config as tfconfig
 
 import datasets
 
@@ -19,7 +18,6 @@ FLAGS = flags.FLAGS
 flags.DEFINE_enum("source", None, datasets.names(), "What dataset to use as the source")
 flags.DEFINE_enum("target", "", [""]+datasets.names(), "What dataset to use as the target")
 flags.DEFINE_boolean("test", False, "Show test images instead of training images")
-flags.DEFINE_float("gpumem", 0.1, "Percentage of GPU memory to let TensorFlow use")
 
 flags.mark_flag_as_required("source")
 
@@ -47,11 +45,8 @@ def display(name, images, max_number=16):
 
 
 def main(argv):
-    # Allow running multiple at once
-    # https://www.tensorflow.org/guide/using_gpu#allowing_gpu_memory_growth
-    # https://github.com/tensorflow/tensorflow/issues/25138
-    # Note: GPU options must be set at program startup
-    tfconfig.set_gpu_per_process_memory_fraction(FLAGS.gpumem)
+    # Don't bother using the GPU for this
+    os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
     # Input data
     if FLAGS.target != "":
