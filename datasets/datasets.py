@@ -672,6 +672,81 @@ class GTSRB(Dataset):
         return train_images, train_labels, test_images, test_labels
 
 
+class OfficeBase(Dataset):
+    """ Base class for loading the Office-31 dataset """
+    num_classes = 31
+    class_labels = ["back_pack", "bike", "bike_helmet", "bookcase", "bottle",
+        "calculator", "desk_chair", "desk_lamp", "desktop_computer",
+        "file_cabinet", "headphones", "keyboard", "laptop_computer",
+        "letter_tray", "mobile_phone", "monitor", "mouse", "mug",
+        "paper_notebook", "pen", "phone", "printer", "projector",
+        "punchers", "ring_binder", "ruler", "scissors", "speaker",
+        "stapler", "tape_dispenser", "trash_can"]
+
+    def __init__(self, office_domain, *args, **kwargs):
+        self.office_domain = office_domain
+        super().__init__(OfficeBase.num_classes, OfficeBase.class_labels,
+            *args, **kwargs)
+
+    def process(self, data, labels):
+        """ Normalize, float """
+        data = data.astype("float32")
+        data = (data - 127.5) / 127.5
+        labels = self.one_hot(labels)
+        return super().process(data, labels)
+
+    def load(self, size=[224, 224]):
+        # Check that the tar.gz file exists
+        compressed = "domain_adaptation_images.tar.gz"
+
+        if not os.path.exists(compressed):
+            print("Download the 'images' domain_adaptation_images.tar.gz "
+                "from http://ai.bu.edu/adaptation.html")
+
+        x = []
+        y = []
+
+        # Get data from the file
+        with tarfile.open(compressed, "r:gz") as tar:
+            for member in tar.getmembers():
+                if self.office_domain in member.name and ".jpg" in member.name:
+                    f = tar.extractfile(member)
+                    if f is not None:
+                        folder, filename = os.path.split(member.name.replace(
+                            self.office_domain+"/images/", ""))
+                        image = self.get_image(f.read())
+                        # Resize so all are the same, 224x244 is the size for
+                        # ResNet-50, which we (and many others) will use
+                        # Alternative: AlexNet is 256x256, which is another
+                        # common choice (though maybe mostly older methods)
+                        image = tf.image.resize(image, size)
+                        image_label = self.label_to_int(folder)
+
+                        x.append(tf.expand_dims(image, 0))
+                        y.append(image_label)
+
+        x = np.vstack(x)
+        y = np.hstack(y)
+
+        # No test set
+        return x, y, None, None
+
+
+class OfficeAmazon(OfficeBase):
+    def __init__(self, *args, **kwargs):
+        super().__init__("amazon", *args, **kwargs)
+
+
+class OfficeDSLR(OfficeBase):
+    def __init__(self, *args, **kwargs):
+        super().__init__("dslr", *args, **kwargs)
+
+
+class OfficeWebcam(OfficeBase):
+    def __init__(self, *args, **kwargs):
+        super().__init__("webcam", *args, **kwargs)
+
+
 # List of datasets
 datasets = {
     "mnist": MNIST,
@@ -683,6 +758,9 @@ datasets = {
     "synnumbers": SynNumbers,
     "synsigns": SynSigns,
     "gtsrb": GTSRB,
+    "office_amazon": OfficeAmazon,
+    "office_dslr": OfficeDSLR,
+    "office_webcam": OfficeWebcam,
 }
 
 
