@@ -822,7 +822,11 @@ def load_da(source_name, target_name, *args, **kwargs):
     # No conversions, resizes, etc.
     else:
         source_dataset = load(source_name, *args, **kwargs)
-        target_dataset = load(target_name, *args, **kwargs)
+
+        if target_name is not None:
+            target_dataset = load(target_name, *args, **kwargs)
+        else:
+            target_dataset = None
 
     return source_dataset, target_dataset
 

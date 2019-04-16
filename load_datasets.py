@@ -39,6 +39,7 @@ flags.DEFINE_integer("prefetch_buffer", 1, "Dataset prefetch buffer size")
 flags.DEFINE_integer("eval_shuffle_seed", 0, "Evaluation shuffle seed for repeatability")
 flags.DEFINE_integer("eval_max_examples", 0, "Max number of examples to evaluate for validation (default 0, i.e. all)")
 flags.DEFINE_boolean("train_on_source_valid", True, "Train on source validation data for small training sets (and in this case, don't draw much from the number)")
+flags.DEFINE_boolean("train_on_target_valid", False, "Train on target validation data for small training sets (i.e., Office-31)")
 
 
 class Dataset:
@@ -213,6 +214,14 @@ def load_da(source_name, target_name, test=False, *args, **kwargs):
         if FLAGS.train_on_source_valid:
             source_train_filenames += source_valid_filenames
             print("Warning: training on source \"valid\" data")
+
+        # For very small datasets, e.g. Office-31, where there might only be a
+        # few thousand target examples, then we might ought to use everything
+        # for training (unlabeled still though; only validation uses labels for
+        # testing, but not during training).
+        if FLAGS.train_on_target_valid:
+            target_train_filenames += target_valid_filenames
+            print("Warning: training on unlabeled target \"valid\" data")
 
     # If test=True, then make "train" consist of both training and validation
     # data to match the original dataset.

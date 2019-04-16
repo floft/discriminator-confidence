@@ -99,17 +99,18 @@ def save_adaptation(source, target, seed=0):
     write(tfrecord_filename(source, target, source, "test"),
         source_dataset.test_images, source_dataset.test_labels)
 
-    target_valid_images, target_valid_labels, \
-        target_train_images, target_train_labels = \
-        valid_split(target_dataset.train_images, target_dataset.train_labels,
-            seed=1)
+    if target is not None:
+        target_valid_images, target_valid_labels, \
+            target_train_images, target_train_labels = \
+            valid_split(target_dataset.train_images, target_dataset.train_labels,
+                    seed=1)
 
-    write(tfrecord_filename(source, target, target, "train"),
-        target_train_images, target_train_labels)
-    write(tfrecord_filename(source, target, target, "valid"),
-        target_valid_images, target_valid_labels)
-    write(tfrecord_filename(source, target, target, "test"),
-        target_dataset.test_images, target_dataset.test_labels)
+        write(tfrecord_filename(source, target, target, "train"),
+            target_train_images, target_train_labels)
+        write(tfrecord_filename(source, target, target, "valid"),
+            target_valid_images, target_valid_labels)
+        write(tfrecord_filename(source, target, target, "test"),
+            target_dataset.test_images, target_dataset.test_labels)
 
 
 def main(argv):
@@ -121,6 +122,10 @@ def main(argv):
         ("mnist", "mnistm"),
         ("synnumbers", "svhn"),
         ("synsigns", "gtsrb"),
+        # All combinations of these, so just make one file for each
+        ("office_amazon", None),
+        ("office_dslr", None),
+        ("office_webcam", None),
     ]
 
     # Save tfrecord files for each of the adaptation problems
