@@ -16,7 +16,6 @@ import load_datasets
 
 from metrics import Metrics
 from checkpoints import CheckpointManager
-from utils import domain_labels
 from file_utils import last_modified_number, write_finished
 
 FLAGS = flags.FLAGS
@@ -27,7 +26,7 @@ flags.DEFINE_string("logdir", "logs", "Directory for saving log files")
 flags.DEFINE_enum("method", None, ["none", "dann", "att", "pseudo"], "What method of domain adaptation to perform (or none)")
 flags.DEFINE_enum("source", None, load_datasets.names(), "What dataset to use as the source")
 flags.DEFINE_enum("target", "", [""]+load_datasets.names(), "What dataset to use as the target")
-flags.DEFINE_integer("steps", 100000, "Number of training steps to run")
+flags.DEFINE_integer("steps", 80000, "Number of training steps to run")
 flags.DEFINE_float("lr", 0.001, "Learning rate for training")
 flags.DEFINE_float("lr_domain_mult", 1.0, "Learning rate multiplier for training domain classifier")
 flags.DEFINE_float("lr_target_mult", 1.0, "Learning rate multiplier for training target classifier")
@@ -37,6 +36,7 @@ flags.DEFINE_integer("model_steps", 4000, "Save the model every so many steps")
 flags.DEFINE_integer("log_train_steps", 500, "Log training information every so many steps")
 flags.DEFINE_integer("log_val_steps", 4000, "Log validation information every so many steps (also saves model)")
 flags.DEFINE_boolean("target_classifier", True, "Use separate target classifier in ATT or Pseudo[-labeling] methods")
+flags.DEFINE_boolean("use_grl", False, "Use gradient reversal layer for training discriminator for adaptation")
 flags.DEFINE_boolean("test", False, "Use real test set for evaluation rather than validation set")
 flags.DEFINE_boolean("debug", False, "Start new log/model/images rather than continuing from previous run")
 flags.DEFINE_integer("debugnum", -1, "Specify exact log/model/images number to use rather than incrementing from last. (Don't pass both this and --debug at the same time.)")
@@ -86,63 +86,117 @@ def get_directory_names():
 
 
 @tf.function
-def train_step(data_a, data_b, model, opt, d_opt, source_domain, target_domain,
-        task_loss, domain_loss, adapt):
-    """ Compiled DANN (or no adaptation) training step that we call many times """
-    if data_a is not None:
-        x_a, y_a = data_a
-    if data_b is not None:
-        x_b, y_b = data_b
+def train_step_grl(data_a, data_b, model, opt, d_opt,
+        task_loss, domain_loss):
+    """ Compiled DANN (with GRL) training step that we call many times """
+    x_a, y_a = data_a
+    x_b, y_b = data_b
 
     # Concatenate for adaptation - concatenate source labels with all-zero
     # labels for target since we can't use the target labels during
     # unsupervised domain adaptation
-    if adapt:
-        assert data_a is not None and data_b is not None, \
-            "Adaptation requires both datasets A and B"
-        x = tf.concat((x_a, x_b), axis=0)
-        task_y_true = tf.concat((y_a, tf.zeros_like(y_b)), axis=0)
-        domain_y_true = tf.concat((source_domain, target_domain), axis=0)
-    else:
-        x = x_a
-        task_y_true = y_a
-        domain_y_true = source_domain
+    x = tf.concat((x_a, x_b), axis=0)
+    task_y_true = tf.concat((y_a, tf.zeros_like(y_b)), axis=0)
 
-    # Run data through model and compute loss
+    half_batch_size = tf.shape(x)[0] / 2
+    source_domain = tf.zeros([half_batch_size, 1])
+    target_domain = tf.ones([half_batch_size, 1])
+    domain_y_true = tf.concat((source_domain, target_domain), axis=0)
+
     with tf.GradientTape() as tape, tf.GradientTape() as d_tape:
         task_y_pred, domain_y_pred = model(x, training=True)
-
         d_loss = domain_loss(domain_y_true, domain_y_pred)
         loss = task_loss(task_y_true, task_y_pred, training=True) + d_loss
 
-    # Only update domain classifier during adaptation
-    if adapt:
-        trainable_vars = model.trainable_variables_task_domain
-    else:
-        trainable_vars = model.trainable_variables_task
+    grad = tape.gradient(loss, model.trainable_variables_task_domain)
+    opt.apply_gradients(zip(grad, model.trainable_variables_task_domain))
 
-    # Update model
-    grad = tape.gradient(loss, trainable_vars)
-    opt.apply_gradients(zip(grad, trainable_vars))
+    # Update discriminator again
+    d_grad = d_tape.gradient(d_loss, model.domain_classifier.trainable_variables)
+    d_opt.apply_gradients(zip(d_grad, model.domain_classifier.trainable_variables))
 
-    # Update discriminator
-    if adapt:
-        d_grad = d_tape.gradient(d_loss, model.domain_classifier.trainable_variables)
-        d_opt.apply_gradients(zip(d_grad, model.domain_classifier.trainable_variables))
 
-    # if adapt:  # TODO try
-    #     for _ in range(FLAGS.max_domain_iters):
-    #         with tf.GradientTape() as d_tape:
-    #             task_y_pred, domain_y_pred = model(x, training=True)
-    #             d_loss = domain_loss(domain_y_true, domain_y_pred)
+@tf.function
+def train_step_gan(data_a, data_b, model, opt, d_opt,
+        task_loss, domain_loss):
+    """ Compiled multi-step (GAN-like, see Shu et al. VADA paper) adaptation
+    training step that we call many times
 
-    #         d_grad = d_tape.gradient(d_loss, model.domain_classifier.trainable_variables)
-    #         d_opt.apply_gradients(zip(d_grad, model.domain_classifier.trainable_variables))
+    Feed through separately so we get different batch normalizations for each
+    domain. Also optimize in a GAN-like manner rather than with GRL."""
+    x_a, y_a = data_a
+    x_b, y_b = data_b
 
-    #         # Break if high enough accuracy
-    #         domain_acc = compute_accuracy(domain_y_true, domain_y_pred)
-    #         if domain_acc > FLAGS.min_domain_accuracy:
-    #             break
+    # The VADA "replacing gradient reversal" (note D(f(x)) = probability of
+    # being target) with non-saturating GAN-style training
+    #with tf.GradientTape() as t_tape, \
+    #        tf.GradientTape() as f_tape, \
+    #        tf.GradientTape() as d_tape:
+    with tf.GradientTape(persistent=True) as tape:
+        task_y_pred_a, domain_y_pred_a = model(x_a, training=True)
+        _, domain_y_pred_b = model(x_b, training=True)
+
+        # Correct task labels (only for source domain)
+        task_y_true_a = y_a
+
+        # Correct domain labels
+        # Source domain = 0, target domain = 1
+        domain_y_true_a = tf.zeros_like(domain_y_pred_a)
+        domain_y_true_b = tf.ones_like(domain_y_pred_b)
+
+        # Update feature extractor and task classifier to correctly predict
+        # labels on source domain
+        t_loss = task_loss(task_y_true_a, task_y_pred_a)
+
+        # Update feature extractor to fool discriminator - min_theta step
+        # (swap ones/zeros from correct, update FE rather than D weights)
+        d_loss_fool = domain_loss(domain_y_true_b, domain_y_pred_a) \
+            + domain_loss(domain_y_true_a, domain_y_pred_b)
+
+        # Update discriminator - min_D step
+        # (train D to be correct, update D weights)
+        d_loss_true = domain_loss(domain_y_true_a, domain_y_pred_a) \
+            + domain_loss(domain_y_true_b, domain_y_pred_b)
+
+    fe_and_task_variables = model.feature_extractor.trainable_variables \
+        + model.task_classifier.trainable_variables
+
+    #t_grad = t_tape.gradient(t_loss, fe_and_task_variables)
+    #f_grad = f_tape.gradient(d_loss_fool, model.feature_extractor.trainable_variables)
+    #d_grad = d_tape.gradient(d_loss_true, model.domain_classifier.trainable_variables)
+
+    t_grad = tape.gradient(t_loss, fe_and_task_variables)
+    f_grad = tape.gradient(d_loss_fool, model.feature_extractor.trainable_variables)
+    d_grad = tape.gradient(d_loss_true, model.domain_classifier.trainable_variables)
+    del tape
+
+    # TODO maybe separate for these?
+    t_opt = opt
+    f_opt = opt
+
+    t_opt.apply_gradients(zip(t_grad, fe_and_task_variables))
+    f_opt.apply_gradients(zip(f_grad, model.feature_extractor.trainable_variables))
+    d_opt.apply_gradients(zip(d_grad, model.domain_classifier.trainable_variables))
+
+    # TODO for inference, use the exponential moving average of the batch norm
+    # statistics on the *target* data -- above will mix them probably.
+
+    # TODO for inference use exponential moving average of *weights* (see VADA)
+
+
+@tf.function
+def train_step_none(data_a, data_b, model, opt, d_opt,
+        task_loss, domain_loss):
+    """ Compiled no adaptation training step that we call many times """
+    x_a, y_a = data_a
+
+    with tf.GradientTape() as tape:
+        task_y_pred, _ = model(x_a, training=True)
+        task_y_true = y_a
+        loss = task_loss(task_y_true, task_y_pred, training=True)
+
+    grad = tape.gradient(loss, model.trainable_variables_task)
+    opt.apply_gradients(zip(grad, model.trainable_variables_task))
 
 
 @tf.function
@@ -154,6 +208,10 @@ def pseudo_label(x, model):
     # probability the data is *target* data (opposite of this, where here we
     # look for data that it thinks is *source* data)
     task_y_pred, domain_y_pred = model(x, training=True)
+
+    # TODO output from domain classifier is now a logit, so needs to be passed
+    # through sigmoid before using as a weight. Also, now it's only one value:
+    # the probability of being target (not source or target).
 
     batch_size = tf.shape(domain_y_pred)[0]
     domain_prob_source = tf.slice(domain_y_pred, [0, 0], [batch_size, 1])
@@ -206,7 +264,7 @@ def main(argv):
     # data, so to keep the batch_size about the same, we'll cut it in half
     train_batch = FLAGS.train_batch
 
-    if adapt:
+    if adapt and FLAGS.use_grl:
         train_batch = train_batch // 2
 
     # Input training data
@@ -236,24 +294,19 @@ def main(argv):
         if target_dataset is not None else None
 
     # Information about domains
-    num_domains = 2  # we'll always assume 2 domains
     num_classes = source_dataset.num_classes
 
     # Loss functions
-    task_loss = models.make_task_loss(adapt)
+    task_loss = models.make_task_loss(adapt and FLAGS.use_grl)
     domain_loss = models.make_domain_loss(adapt)
     weighted_task_loss = models.make_weighted_loss()
-
-    # Source domain will be [[1,0], [1,0], ...] and target domain [[0,1], [0,1], ...]
-    source_domain = domain_labels(0, train_batch, num_domains)
-    target_domain = domain_labels(1, train_batch, num_domains)
 
     # We need to know where we are in training for the GRL lambda schedule
     global_step = tf.Variable(0, name="global_step", trainable=False)
 
     # Build our model
-    model = models.DomainAdaptationModel(num_classes, num_domains, FLAGS.model,
-        global_step, FLAGS.steps)
+    model = models.DomainAdaptationModel(num_classes, FLAGS.model,
+        global_step, FLAGS.steps, use_grl=FLAGS.use_grl)
 
     # Optimizers
     opt = tf.keras.optimizers.Adam(FLAGS.lr)
@@ -275,7 +328,7 @@ def main(argv):
 
     # Metrics
     has_target_domain = target_dataset is not None
-    metrics = Metrics(log_dir, source_dataset, num_domains,
+    metrics = Metrics(log_dir, source_dataset,
         task_loss, domain_loss, has_target_domain, has_target_classifier)
 
     # Start training
@@ -285,8 +338,14 @@ def main(argv):
         data_b = next(target_iter) if target_iter is not None else None
 
         t = time.time()
-        train_step(data_a, data_b, model, opt, d_opt,
-            source_domain, target_domain, task_loss, domain_loss, adapt)
+        step_args = (data_a, data_b, model, opt, d_opt, task_loss, domain_loss)
+
+        if adapt and FLAGS.use_grl:
+            train_step_grl(*step_args)
+        elif adapt:
+            train_step_gan(*step_args)
+        else:
+            train_step_none(*step_args)
 
         if do_pseudo_labeling:
             # We'll ignore the real labels, so just get the data

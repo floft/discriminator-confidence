@@ -5,7 +5,7 @@ Update metrics for displaying in TensorBoard during training or evaluation after
 training
 
 Usage during training (logging to a log file for TensorBoard):
-    metrics = Metrics(log_dir, source_dataset, num_domains,
+    metrics = Metrics(log_dir, source_dataset,
         task_loss_fn, domain_loss_fn, domain_b_data is not None)
 
     # Evaluate model on a single training batch, update metrics, save to log file
@@ -15,7 +15,7 @@ Usage during training (logging to a log file for TensorBoard):
     validation_accuracy = metrics.test(model, eval_data_a, eval_data_b, step)
 
 Usage after training (evaluating but not logging):
-    metrics = Metrics(log_dir, source_dataset, num_domains,
+    metrics = Metrics(log_dir, source_dataset,
         None, None, domain_b_data is not None)
 
     # Evaluate on datasets
@@ -29,8 +29,6 @@ import time
 import tensorflow as tf
 
 from absl import flags
-
-from utils import tf_domain_labels
 
 FLAGS = flags.FLAGS
 
@@ -55,13 +53,12 @@ class Metrics:
     Loss values:
         loss/{total,task,domain}
     """
-    def __init__(self, log_dir, source_dataset, num_domains,
+    def __init__(self, log_dir, source_dataset,
             task_loss, domain_loss, target_domain=True,
             target_classifier=False, enable_compile=True):
         self.writer = tf.summary.create_file_writer(log_dir)
         self.source_dataset = source_dataset
         self.num_classes = source_dataset.num_classes
-        self.num_domains = num_domains
         self.datasets = ["training", "validation"]
         self.task_loss = task_loss if task_loss is not None else lambda y_true, y_pred, training: 0
         self.domain_loss = domain_loss if domain_loss is not None else lambda y_true, y_pred: 0
@@ -281,19 +278,21 @@ class Metrics:
             after_batch([labels_batch_a, task_y_pred, domains_batch_a, domain_y_pred,
                 total_loss, task_loss, domain_loss], domain_name, dataset_name)
 
-        Domain should be either 0 or 1 (if num_domains==2).
+        Domain should be either 0 or 1 (source or target).
         """
         assert dataset_name in self.datasets, "unknown dataset "+str(dataset_name)
         assert domain_name in self.domains, "unknown domain "+str(domain_name)
-
-        # Note: if you do x.shape[0] here, it'll give None on last batch and error
-        batch_size = tf.shape(x)[0]
-
-        # Match the number of examples
-        domain_y_true = tf_domain_labels(domain_num, batch_size, self.num_domains)
+        assert domain_num == 0 or domain_num == 1, \
+            "domain_num = 0 or 1 for source or target"
 
         # Evaluate model on data
         task_y_pred, domain_y_pred = model(x, target=target, training=False)
+
+        # Match the number of examples
+        if domain_num == 0:
+            domain_y_true = tf.zeros_like(domain_y_pred)  # source domain
+        else:
+            domain_y_true = tf.ones_like(domain_y_pred)  # target domain
 
         # Calculate losses
         task_l = self.task_loss(task_y_true, task_y_pred, training=False)
