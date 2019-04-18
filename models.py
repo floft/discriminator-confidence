@@ -68,8 +68,12 @@ def DisableGrlSchedule():
 
 def DannGrlSchedule(num_steps):
     """ GRL schedule from DANN paper """
+    num_steps = tf.cast(num_steps, tf.float32)
+
     def schedule(step):
+        step = tf.cast(step, tf.float32)
         return 2/(1+tf.exp(-10*(step/(num_steps+1))))-1
+
     return schedule
 
 

@@ -118,7 +118,7 @@ def train_step_grl(data_a, data_b, model, opt, d_opt,
 
 @tf.function
 def train_step_gan(data_a, data_b, model, opt, d_opt,
-        task_loss, domain_loss):
+        task_loss, domain_loss, grl_schedule, global_step):
     """ Compiled multi-step (GAN-like, see Shu et al. VADA paper) adaptation
     training step that we call many times
 
@@ -153,6 +153,9 @@ def train_step_gan(data_a, data_b, model, opt, d_opt,
         d_loss_fool = domain_loss(domain_y_true_b, domain_y_pred_a) \
             + domain_loss(domain_y_true_a, domain_y_pred_b)
 
+        # Weight by same schedule as GRL to make this more equivalent
+        d_loss_fool *= grl_schedule(global_step)
+
         # Update discriminator - min_D step
         # (train D to be correct, update D weights)
         d_loss_true = domain_loss(domain_y_true_a, domain_y_pred_a) \
@@ -170,12 +173,10 @@ def train_step_gan(data_a, data_b, model, opt, d_opt,
     d_grad = tape.gradient(d_loss_true, model.domain_classifier.trainable_variables)
     del tape
 
-    # TODO maybe separate for these?
-    t_opt = opt
-    f_opt = opt
-
-    t_opt.apply_gradients(zip(t_grad, fe_and_task_variables))
-    f_opt.apply_gradients(zip(f_grad, model.feature_extractor.trainable_variables))
+    # Use opt (not d_opt) for updating FE in both cases, so Adam keeps track of
+    # the updates to the FE weights
+    opt.apply_gradients(zip(t_grad, fe_and_task_variables))
+    opt.apply_gradients(zip(f_grad, model.feature_extractor.trainable_variables))
     d_opt.apply_gradients(zip(d_grad, model.domain_classifier.trainable_variables))
 
     # TODO for inference, use the exponential moving average of the batch norm
@@ -309,6 +310,10 @@ def main(argv):
     opt = tf.keras.optimizers.Adam(FLAGS.lr)
     d_opt = tf.keras.optimizers.Adam(FLAGS.lr*FLAGS.lr_domain_mult)
 
+    # For GAN-like training (train_step_gan), we'll weight by the GRL schedule
+    # to make it more equivalent to when use_grl=True.
+    grl_schedule = models.DannGrlSchedule(FLAGS.steps)
+
     # Target classifier optimizer if target_classifier, otherwise the optimizer
     # for the task-classifier when running on pseudo-labeled data
     do_pseudo_labeling = FLAGS.method in ["att", "pseudo"]
@@ -340,7 +345,7 @@ def main(argv):
         if adapt and FLAGS.use_grl:
             train_step_grl(*step_args)
         elif adapt:
-            train_step_gan(*step_args)
+            train_step_gan(*step_args, grl_schedule, global_step)
         else:
             train_step_none(*step_args)
 
