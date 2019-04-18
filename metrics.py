@@ -79,7 +79,10 @@ class Metrics:
         self.batch_metrics = {dataset: {} for dataset in self.datasets}
         for domain in self.domains:
             for dataset in self.datasets:
-                for name in ["domain"]+self.classifiers:
+                n = "accuracy_domain/%s/%s"%(domain, dataset)
+                self.batch_metrics[dataset][n] = tf.keras.metrics.BinaryAccuracy(name=n)
+
+                for name in self.classifiers:
                     n = "accuracy_%s/%s/%s"%(name, domain, dataset)
                     self.batch_metrics[dataset][n] = tf.keras.metrics.CategoricalAccuracy(name=n)
 
@@ -298,6 +301,10 @@ class Metrics:
         task_l = self.task_loss(task_y_true, task_y_pred, training=False)
         domain_l = self.domain_loss(domain_y_true, domain_y_pred)
         total_l = task_l + domain_l
+
+        # We'll compute the accuracy based on a binary output, not the logits
+        # which we used for the loss function
+        domain_y_pred = tf.sigmoid(domain_y_pred)
 
         # Process this batch
         results = [

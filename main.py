@@ -209,13 +209,10 @@ def pseudo_label(x, model):
     # look for data that it thinks is *source* data)
     task_y_pred, domain_y_pred = model(x, training=True)
 
-    # TODO output from domain classifier is now a logit, so needs to be passed
-    # through sigmoid before using as a weight. Also, now it's only one value:
-    # the probability of being target (not source or target).
-
-    batch_size = tf.shape(domain_y_pred)[0]
-    domain_prob_source = tf.slice(domain_y_pred, [0, 0], [batch_size, 1])
-    domain_prob_target = tf.slice(domain_y_pred, [0, 1], [batch_size, 1])
+    # The domain classifier output is logits, so we need to pass through sigmoid
+    # to get a probability before using as a weight.
+    domain_prob_target = tf.sigmoid(domain_y_pred)
+    domain_prob_source = 1 - domain_prob_target
 
     return task_y_pred, domain_prob_source, domain_prob_target
 
