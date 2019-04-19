@@ -120,7 +120,8 @@ def train_step_grl(data_a, data_b, model, opt, d_opt,
 
 @tf.function
 def train_step_gan(data_a, data_b, model, opt, d_opt,
-        task_loss, domain_loss, grl_schedule, global_step, weighted_task_loss):
+        task_loss, domain_loss, grl_schedule, global_step, weighted_task_loss,
+        epsilon=1e-8):
     """ Compiled multi-step (GAN-like, see Shu et al. VADA paper) adaptation
     training step that we call many times
 
@@ -154,7 +155,20 @@ def train_step_gan(data_a, data_b, model, opt, d_opt,
             # prediction / max value)
             if FLAGS.use_domain_confidence:
                 weights = tf.sigmoid(domain_y_pred_a)
+
+                # Alternative weighting, like Algorithm 23 of Daume's ML book
+                #
+                # Note: we use 1-weights since the weights above is P(s=target)
+                # whereas in Alg. 23 it's P(s=source) = 1 - P(s=target).
+                # Then we do 1/P(...) - 1 as in the algorithm, but clip so it's
+                # not too large.
+                if FLAGS.use_alt_weight:
+                    weights = 1/((1-weights)+epsilon) - 1
+                    weights = tf.clip_by_value(weights, 0, 100)
             else:
+                # TODO this is *really* bad which probably indicates it has to
+                # do with how I'm weighting in both this case and in pseudo-
+                # labeling rather than domain vs. task confidence.
                 weights = tf.reduce_max(task_y_pred_a, axis=1)
 
             t_loss = weighted_task_loss(task_y_true_a, task_y_pred_a, weights)
