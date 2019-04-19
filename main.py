@@ -23,7 +23,7 @@ FLAGS = flags.FLAGS
 flags.DEFINE_enum("model", None, models.names(), "What model type to use")
 flags.DEFINE_string("modeldir", "models", "Directory for saving model files")
 flags.DEFINE_string("logdir", "logs", "Directory for saving log files")
-flags.DEFINE_enum("method", None, ["none", "dann", "att", "pseudo"], "What method of domain adaptation to perform (or none)")
+flags.DEFINE_enum("method", None, ["none", "dann", "pseudo", "instance"], "What method of domain adaptation to perform (or none)")
 flags.DEFINE_enum("source", None, load_datasets.names(), "What dataset to use as the source")
 flags.DEFINE_enum("target", "", [""]+load_datasets.names(), "What dataset to use as the target")
 flags.DEFINE_integer("steps", 80000, "Number of training steps to run")
@@ -35,7 +35,7 @@ flags.DEFINE_float("gpumem", 0.3, "Percentage of GPU memory to let TensorFlow us
 flags.DEFINE_integer("model_steps", 4000, "Save the model every so many steps")
 flags.DEFINE_integer("log_train_steps", 500, "Log training information every so many steps")
 flags.DEFINE_integer("log_val_steps", 4000, "Log validation information every so many steps (also saves model)")
-flags.DEFINE_boolean("target_classifier", True, "Use separate target classifier in ATT or Pseudo[-labeling] methods")
+flags.DEFINE_boolean("target_classifier", True, "Use separate target classifier in pseudo[-labeling] methods")
 flags.DEFINE_boolean("use_grl", False, "Use gradient reversal layer for training discriminator for adaptation")
 flags.DEFINE_boolean("use_alt_weight", False, "Use alternate weighting for target classifier")
 flags.DEFINE_boolean("use_domain_confidence", True, "Use domain classifier for confidence instead of task classifier")
@@ -55,8 +55,8 @@ def get_directory_names():
     methods_suffix = {
         "none": "",
         "dann": "-dann",
-        "att": "-att",
         "pseudo": "-pseudo",
+        "instance": "-instance",
     }
 
     prefix += methods_suffix[FLAGS.method]
@@ -120,7 +120,7 @@ def train_step_grl(data_a, data_b, model, opt, d_opt,
 
 @tf.function
 def train_step_gan(data_a, data_b, model, opt, d_opt,
-        task_loss, domain_loss, grl_schedule, global_step):
+        task_loss, domain_loss, grl_schedule, global_step, weighted_task_loss):
     """ Compiled multi-step (GAN-like, see Shu et al. VADA paper) adaptation
     training step that we call many times
 
@@ -148,7 +148,18 @@ def train_step_gan(data_a, data_b, model, opt, d_opt,
 
         # Update feature extractor and task classifier to correctly predict
         # labels on source domain
-        t_loss = task_loss(task_y_true_a, task_y_pred_a)
+        if FLAGS.method == "instance":
+            # Get "confidence" from domain (probability it's target data)
+            # classifier or task classifier (softmax probability of the
+            # prediction / max value)
+            if FLAGS.use_domain_confidence:
+                weights = tf.sigmoid(domain_y_pred_a)
+            else:
+                weights = tf.reduce_max(task_y_pred_a, axis=1)
+
+            t_loss = weighted_task_loss(task_y_true_a, task_y_pred_a, weights)
+        else:
+            t_loss = task_loss(task_y_true_a, task_y_pred_a)
 
         # Update feature extractor to fool discriminator - min_theta step
         # (swap ones/zeros from correct, update FE rather than D weights)
@@ -343,7 +354,7 @@ def main(argv):
 
     # Target classifier optimizer if target_classifier, otherwise the optimizer
     # for the task-classifier when running on pseudo-labeled data
-    do_pseudo_labeling = FLAGS.method in ["att", "pseudo"]
+    do_pseudo_labeling = FLAGS.method == "pseudo"
     has_target_classifier = do_pseudo_labeling and FLAGS.target_classifier
     t_mult = FLAGS.lr_target_mult if has_target_classifier else FLAGS.lr_pseudo_mult
     t_opt = tf.keras.optimizers.Adam(FLAGS.lr*t_mult)
@@ -372,7 +383,8 @@ def main(argv):
         if adapt and FLAGS.use_grl:
             train_step_grl(*step_args)
         elif adapt:
-            train_step_gan(*step_args, grl_schedule, global_step)
+            train_step_gan(*step_args, grl_schedule, global_step,
+                weighted_task_loss)
         else:
             train_step_none(*step_args)
 
