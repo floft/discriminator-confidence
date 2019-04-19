@@ -30,12 +30,10 @@ flags.DEFINE_integer("steps", 80000, "Number of training steps to run")
 flags.DEFINE_float("lr", 0.001, "Learning rate for training")
 flags.DEFINE_float("lr_domain_mult", 1.0, "Learning rate multiplier for training domain classifier")
 flags.DEFINE_float("lr_target_mult", 0.5, "Learning rate multiplier for training target classifier")
-flags.DEFINE_float("lr_pseudo_mult", 0.5, "Learning rate multiplier for training task classifier on pseudo-labeled data")
 flags.DEFINE_float("gpumem", 0.3, "Percentage of GPU memory to let TensorFlow use")
 flags.DEFINE_integer("model_steps", 4000, "Save the model every so many steps")
 flags.DEFINE_integer("log_train_steps", 500, "Log training information every so many steps")
 flags.DEFINE_integer("log_val_steps", 4000, "Log validation information every so many steps (also saves model)")
-flags.DEFINE_boolean("target_classifier", True, "Use separate target classifier in pseudo[-labeling] methods")
 flags.DEFINE_boolean("use_grl", False, "Use gradient reversal layer for training discriminator for adaptation")
 flags.DEFINE_boolean("use_alt_weight", False, "Use alternate weighting for target classifier")
 flags.DEFINE_boolean("use_domain_confidence", True, "Use domain classifier for confidence instead of task classifier")
@@ -276,21 +274,17 @@ def pseudo_label_task(x, model, epsilon=1e-8):
 
 
 @tf.function
-def train_step_target(data_b, weights, model, opt, weighted_task_loss,
-        target_classifier):
+def train_step_target(data_b, weights, model, opt, weighted_task_loss):
     """ Compiled train step for pseudo-labeled target data """
     x, task_y_pseudo = data_b
 
     # Run data through model and compute loss
     with tf.GradientTape() as tape:
-        task_y_pred, domain_y_pred = model(x, target=target_classifier, training=True)
+        task_y_pred, domain_y_pred = model(x, target=True, training=True)
         loss = weighted_task_loss(task_y_pseudo, task_y_pred, weights, training=True)
 
     # Only update feature extractor and target classifier
-    if target_classifier:
-        trainable_vars = model.trainable_variables_target
-    else:
-        trainable_vars = model.trainable_variables_task
+    trainable_vars = model.trainable_variables_target
 
     # Update model
     grad = tape.gradient(loss, trainable_vars)
@@ -373,10 +367,8 @@ def main(argv):
 
     # Target classifier optimizer if target_classifier, otherwise the optimizer
     # for the task-classifier when running on pseudo-labeled data
-    do_pseudo_labeling = FLAGS.method == "pseudo"
-    has_target_classifier = FLAGS.method in ["pseudo", "instance"] and FLAGS.target_classifier
-    t_mult = FLAGS.lr_target_mult if has_target_classifier else FLAGS.lr_pseudo_mult
-    t_opt = tf.keras.optimizers.Adam(FLAGS.lr*t_mult)
+    has_target_classifier = FLAGS.method in ["pseudo", "instance"]
+    t_opt = tf.keras.optimizers.Adam(FLAGS.lr*FLAGS.lr_target_mult)
 
     # Checkpoints
     checkpoint = tf.train.Checkpoint(
@@ -406,7 +398,7 @@ def main(argv):
         else:
             train_step_none(*step_args)
 
-        if do_pseudo_labeling:
+        if FLAGS.method == "pseudo":
             # We'll ignore the real labels, so just get the data
             x, _ = data_b
 
@@ -422,12 +414,12 @@ def main(argv):
             # Train target classifier on pseudo-labeled data, weighted
             # by probability that it's source data (i.e. higher confidence)
             train_step_target(data_b_pseudo, weights, model,
-                t_opt, weighted_task_loss, has_target_classifier)
+                t_opt, weighted_task_loss)
         elif FLAGS.method == "instance":
             # Train target classifier on source data, but weighted
             # by probability that it's target data
             train_step_target(data_a, instance_weights, model,
-                t_opt, weighted_task_loss, has_target_classifier)
+                t_opt, weighted_task_loss)
 
         global_step.assign_add(1)
         t = time.time() - t
