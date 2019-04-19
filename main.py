@@ -37,6 +37,8 @@ flags.DEFINE_integer("log_train_steps", 500, "Log training information every so 
 flags.DEFINE_integer("log_val_steps", 4000, "Log validation information every so many steps (also saves model)")
 flags.DEFINE_boolean("target_classifier", True, "Use separate target classifier in ATT or Pseudo[-labeling] methods")
 flags.DEFINE_boolean("use_grl", False, "Use gradient reversal layer for training discriminator for adaptation")
+flags.DEFINE_boolean("use_alt_weight", False, "Use alternate weighting for target classifier")
+flags.DEFINE_boolean("use_domain_confidence", True, "Use domain classifier for confidence instead of task classifier")
 flags.DEFINE_boolean("test", False, "Use real test set for evaluation rather than validation set")
 flags.DEFINE_boolean("debug", False, "Start new log/model/images rather than continuing from previous run")
 flags.DEFINE_integer("debugnum", -1, "Specify exact log/model/images number to use rather than incrementing from last. (Don't pass both this and --debug at the same time.)")
@@ -201,13 +203,11 @@ def train_step_none(data_a, data_b, model, opt, d_opt,
 
 
 @tf.function
-def pseudo_label(x, model):
-    """ Compiled step for pseudo-labeling target data """
+def pseudo_label_domain(x, model, epsilon=1e-8):
+    """ Compiled step for pseudo-labeling target data based on domain classifier
+    confidence that the data is source-like """
     # Run target data through model, return the predictions and probability
     # of being source data
-    # TODO also possible to weight updates to normal "task classifier" by the
-    # probability the data is *target* data (opposite of this, where here we
-    # look for data that it thinks is *source* data)
     task_y_pred, domain_y_pred = model(x, training=True)
 
     # The domain classifier output is logits, so we need to pass through sigmoid
@@ -215,7 +215,34 @@ def pseudo_label(x, model):
     domain_prob_target = tf.sigmoid(domain_y_pred)
     domain_prob_source = 1 - domain_prob_target
 
-    return task_y_pred, domain_prob_source, domain_prob_target
+    # If desired, perform weighting more like Algorithm 23 of Daume's ML book
+    # Note: didn't really help, at least in testing so far.
+    if FLAGS.use_alt_weight:
+        domain_prob_source = 1/(domain_prob_target+epsilon) - 1
+
+        # Clip so not too large
+        domain_prob_source = tf.clip_by_value(domain_prob_source, 0, 100)
+
+    return task_y_pred, domain_prob_source
+
+
+@tf.function
+def pseudo_label_task(x, model, epsilon=1e-8):
+    """ Compiled step for pseudo-labeling target data based on task classifier
+    confidence """
+    task_y_pred, _ = model(x, training=True)
+
+    # For each prediction in the batch, the get the max (the actual prediction,
+    # since the other softmax outputs are lower) and use this as the confidence.
+    # For example, if three labels for example 1 we may predict [0.05, 0.05, 0.9]
+    # for 0.05 probability for class 0 or 1 but 0.9 probability for class 2.
+    # We say the "confidence" then is 0.9 that it's class 2. In contrast, we have
+    # much less confidence if it were [0.33, 0.33, 0.34].
+    task_confidence = tf.reduce_max(task_y_pred, axis=1)
+
+    # TODO maybe normalize by number of classes?
+
+    return task_y_pred, task_confidence
 
 
 @tf.function
@@ -354,14 +381,17 @@ def main(argv):
             x, _ = data_b
 
             # Pseudo-label target data
-            task_y_pred, domain_prob_source, _ = pseudo_label(x, model)
+            if FLAGS.use_domain_confidence:
+                task_y_pred, weights = pseudo_label_domain(x, model)
+            else:
+                task_y_pred, weights = pseudo_label_task(x, model)
 
             # Create new data with same input by pseudo-labels not true labels
             data_b_pseudo = (x, task_y_pred)
 
             # Train target classifier on pseudo-labeled data, weighted
             # by probability that it's source data (i.e. higher confidence)
-            train_step_target(data_b_pseudo, domain_prob_source, model,
+            train_step_target(data_b_pseudo, weights, model,
                 t_opt, weighted_task_loss, has_target_classifier)
 
         global_step.assign_add(1)
