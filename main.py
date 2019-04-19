@@ -120,7 +120,7 @@ def train_step_grl(data_a, data_b, model, opt, d_opt,
 
 @tf.function
 def train_step_gan(data_a, data_b, model, opt, d_opt,
-        task_loss, domain_loss, grl_schedule, global_step, weighted_task_loss,
+        task_loss, domain_loss, grl_schedule, global_step,
         epsilon=1e-8):
     """ Compiled multi-step (GAN-like, see Shu et al. VADA paper) adaptation
     training step that we call many times
@@ -149,31 +149,7 @@ def train_step_gan(data_a, data_b, model, opt, d_opt,
 
         # Update feature extractor and task classifier to correctly predict
         # labels on source domain
-        if FLAGS.method == "instance":
-            # Get "confidence" from domain (probability it's target data)
-            # classifier or task classifier (softmax probability of the
-            # prediction / max value)
-            if FLAGS.use_domain_confidence:
-                weights = tf.sigmoid(domain_y_pred_a)
-
-                # Alternative weighting, like Algorithm 23 of Daume's ML book
-                #
-                # Note: we use 1-weights since the weights above is P(s=target)
-                # whereas in Alg. 23 it's P(s=source) = 1 - P(s=target).
-                # Then we do 1/P(...) - 1 as in the algorithm, but clip so it's
-                # not too large.
-                if FLAGS.use_alt_weight:
-                    weights = 1/((1-weights)+epsilon) - 1
-                    weights = tf.clip_by_value(weights, 0, 100)
-            else:
-                # TODO this is *really* bad which probably indicates it has to
-                # do with how I'm weighting in both this case and in pseudo-
-                # labeling rather than domain vs. task confidence.
-                weights = tf.reduce_max(task_y_pred_a, axis=1)
-
-            t_loss = weighted_task_loss(task_y_true_a, task_y_pred_a, weights)
-        else:
-            t_loss = task_loss(task_y_true_a, task_y_pred_a)
+        t_loss = task_loss(task_y_true_a, task_y_pred_a)
 
         # Update feature extractor to fool discriminator - min_theta step
         # (swap ones/zeros from correct, update FE rather than D weights)
@@ -210,6 +186,35 @@ def train_step_gan(data_a, data_b, model, opt, d_opt,
     # statistics on the *target* data -- above will mix them probably.
 
     # TODO for inference use exponential moving average of *weights* (see VADA)
+
+    # For instance weighting, we need to calculate the weights to use
+    if FLAGS.method == "instance":
+        # Get "confidence" from domain (probability it's target data)
+        # classifier or task classifier (softmax probability of the
+        # prediction / max value)
+        if FLAGS.use_domain_confidence:
+            weights = tf.sigmoid(domain_y_pred_a)
+
+            # Alternative weighting, like Algorithm 23 of Daume's ML book
+            #
+            # Note: we use 1-weights since the weights above is P(s=target)
+            # whereas in Alg. 23 it's P(s=source) = 1 - P(s=target).
+            # Then we do 1/P(...) - 1 as in the algorithm, but clip so it's
+            # not too large.
+            if FLAGS.use_alt_weight:
+                weights = 1/((1-weights)+epsilon) - 1
+                weights = tf.clip_by_value(weights, 0, 100)
+        else:
+            # TODO this is *really* bad which probably indicates it has to
+            # do with how I'm weighting in both this case and in pseudo-
+            # labeling rather than domain vs. task confidence.
+            weights = tf.reduce_max(task_y_pred_a, axis=1)
+
+        return weights
+
+    # If not doing instance weighting, just weight by 1
+    else:
+        return tf.ones_like(domain_y_pred_a)
 
 
 @tf.function
@@ -369,7 +374,7 @@ def main(argv):
     # Target classifier optimizer if target_classifier, otherwise the optimizer
     # for the task-classifier when running on pseudo-labeled data
     do_pseudo_labeling = FLAGS.method == "pseudo"
-    has_target_classifier = do_pseudo_labeling and FLAGS.target_classifier
+    has_target_classifier = FLAGS.method in ["pseudo", "instance"] and FLAGS.target_classifier
     t_mult = FLAGS.lr_target_mult if has_target_classifier else FLAGS.lr_pseudo_mult
     t_opt = tf.keras.optimizers.Adam(FLAGS.lr*t_mult)
 
@@ -397,8 +402,7 @@ def main(argv):
         if adapt and FLAGS.use_grl:
             train_step_grl(*step_args)
         elif adapt:
-            train_step_gan(*step_args, grl_schedule, global_step,
-                weighted_task_loss)
+            instance_weights = train_step_gan(*step_args, grl_schedule, global_step)
         else:
             train_step_none(*step_args)
 
@@ -418,6 +422,11 @@ def main(argv):
             # Train target classifier on pseudo-labeled data, weighted
             # by probability that it's source data (i.e. higher confidence)
             train_step_target(data_b_pseudo, weights, model,
+                t_opt, weighted_task_loss, has_target_classifier)
+        elif FLAGS.method == "instance":
+            # Train target classifier on source data, but weighted
+            # by probability that it's target data
+            train_step_target(data_a, instance_weights, model,
                 t_opt, weighted_task_loss, has_target_classifier)
 
         global_step.assign_add(1)
