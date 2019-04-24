@@ -37,6 +37,7 @@ flags.DEFINE_integer("log_val_steps", 4000, "Log validation information every so
 flags.DEFINE_boolean("use_grl", False, "Use gradient reversal layer for training discriminator for adaptation")
 flags.DEFINE_boolean("use_alt_weight", False, "Use alternate weighting for target classifier")
 flags.DEFINE_boolean("use_domain_confidence", True, "Use domain classifier for confidence instead of task classifier")
+flags.DEFINE_boolean("compile_metrics", True, "Compile metrics loop with tf.function for subsequent speed (disable if std::terminate)")
 flags.DEFINE_boolean("test", False, "Use real test set for evaluation rather than validation set")
 flags.DEFINE_boolean("debug", False, "Start new log/model/images rather than continuing from previous run")
 flags.DEFINE_integer("debugnum", -1, "Specify exact log/model/images number to use rather than incrementing from last. (Don't pass both this and --debug at the same time.)")
@@ -380,7 +381,8 @@ def main(argv):
     # Metrics
     has_target_domain = target_dataset is not None
     metrics = Metrics(log_dir, source_dataset,
-        task_loss, domain_loss, has_target_domain, has_target_classifier)
+        task_loss, domain_loss, has_target_domain, has_target_classifier,
+        enable_compile=FLAGS.compile_metrics)
 
     # Start training
     for i in range(int(global_step), FLAGS.steps+1):
