@@ -31,14 +31,14 @@ from checkpoints import CheckpointManager
 
 FLAGS = flags.FLAGS
 
-methods = ["none", "dann", "att", "pseudo"]
+methods = ["none", "dann", "pseudo", "instance"]
 
 # Same as in main.py
 flags.DEFINE_string("modeldir", "models", "Directory for saving model files")
 flags.DEFINE_string("logdir", "logs", "Directory for saving log files")
 flags.DEFINE_boolean("target_classifier", True, "Use separate target classifier in ATT or Pseudo[-labeling] methods")
 flags.DEFINE_boolean("best_target", True, "If target_classifier, then pick best model based on target classifier accuracy (not task classifier accuracy)")
-# Specifid for evaluation
+# Specific for evaluation
 flags.DEFINE_float("gpumem", 0.8, "Percentage of GPU memory to let TensorFlow use (divided among jobs)")
 flags.DEFINE_string("match", "*-*-*", "String matching to determine which logs/models to process")
 flags.DEFINE_integer("jobs", 4, "Number of TensorFlow jobs to run at once")
@@ -117,9 +117,11 @@ def print_results(results):
     target_target_train = []
     target_target_test = []
 
-    print("Source,Target,Model,Method,Train A,Test A,Train B,Test B, Target Train A, "
-        "Target Test A, Target Train B, Target Test B")
-    for source, target, model, method, s_train, t_train, s_test, t_test, \
+    print("Log Dir,Source,Target,Model,Method,"
+        "Train A,Test A,Train B,Test B,Target Train A,"
+        "Target Test A,Target Train B,Target Test B")
+    for log_dir, source, target, model, method, \
+            s_train, t_train, s_test, t_test, \
             target_s_train, target_s_test, target_t_train, target_t_test \
             in results:
         if s_train is not None and s_test is not None:
@@ -139,7 +141,8 @@ def print_results(results):
             if target_t_test is None:
                 target_t_test = 0
 
-            print(source + "," + target + "," + model + "," + method + ","
+            print(log_dir + "," + source + "," + target + ","
+                + model + "," + method + ","
                 + str(s_train) + "," + str(s_test) + ","
                 + str(t_train) + "," + str(t_test) + ","
                 + str(target_s_train) + "," + str(target_s_test) + ","
@@ -254,11 +257,11 @@ def process_model(log_dir, model_dir, source, target, model_name, method_name,
     # we set them to here
     global_step = 1
     num_steps = 1
-    model = DomainAdaptationModel(num_classes, num_domains, model_name,
+    model = DomainAdaptationModel(num_classes, model_name,
         global_step, num_steps)
 
     # Does this method use a target classifier?
-    do_pseudo_labeling = method_name in ["att", "pseudo"]
+    do_pseudo_labeling = method_name == "pseudo"
     has_target_classifier = do_pseudo_labeling and FLAGS.target_classifier
 
     # Load model from checkpoint
@@ -280,7 +283,8 @@ def process_model(log_dir, model_dir, source, target, model_name, method_name,
             max_accuracy = checkpoint_manager.best_validation
 
     # Print which step we're loading the model for
-    print(source + "," + target + "," + method_name + "," + model_name + ","
+    print(log_dir + "," + source + "," + target + ","
+        + method_name + "," + model_name + ","
         + str(max_accuracy_step) + "," + str(max_accuracy))
 
     # If not found, give up
@@ -291,7 +295,7 @@ def process_model(log_dir, model_dir, source, target, model_name, method_name,
 
     # Metrics
     have_target_domain = target_dataset is not None
-    metrics = Metrics(log_dir, source_dataset, num_domains,
+    metrics = Metrics(log_dir, source_dataset,
             None, None, have_target_domain,
             target_classifier=has_target_classifier,
             enable_compile=False)
@@ -325,7 +329,7 @@ def process_model(log_dir, model_dir, source, target, model_name, method_name,
         t_train = None
         t_test = None
 
-    return source, target, model_name, method_name, \
+    return log_dir, source, target, model_name, method_name, \
         s_train, t_train, s_test, t_test, \
         target_s_train, target_s_test, target_t_train, target_t_test
 
@@ -355,7 +359,7 @@ def main(argv):
         commands.append((*model_params, gpumem, multi_gpu))
 
     # Also prints which models we load
-    print("Source,Target,Model,Method,Best Step,Accuracy at Step")
+    print("Log Dir,Source,Target,Model,Method,Best Step,Accuracy at Step")
     results = run_job_pool(process_model, commands, cores=jobs)
 
     # Print results, averages, etc.
