@@ -13,3 +13,4 @@ graph.pbtxt
 *.png
 *.tar.gz
 *.tfrecord
+slurm_logs

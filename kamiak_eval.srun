@@ -3,18 +3,32 @@
 #SBATCH --output=slurm_logs/eval_%j.out
 #SBATCH --error=slurm_logs/eval_%j.err
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=24
+#SBATCH --cpus-per-task=7
 #SBATCH --nodes=1-1
-#SBATCH --gres=gpu:tesla:8
+#SBATCH --gres=gpu:1
 #SBATCH --partition=taylor
 #SBATCH --time=1-00:00:00
-#SBATCH --mem=220G
+#SBATCH --mem=30G
 
 #
 # Evaluate models with main_eval.py
 #
 
 . kamiak_config.sh
+
+# For on my own computer
+remotedir="$localdir"  # for use on my own computer
+# SBATCH --cpus-per-task=7
+# SBATCH --gres=gpu:1
+# SBATCH --mem=30G
+gpus=1
+gpumem=0.8
+# For actual use on Kamiak...
+# SBATCH --cpus-per-task=24
+# SBATCH --gres=gpu:8
+# SBATCH --mem=220G
+#gpus=8
+#gpumem=0.9
 
 # Errors
 handle_terminate() {
@@ -48,8 +62,9 @@ models="$remotedir/$from-models-$suffix"
 logs="$remotedir/$from-logs-$suffix"
 out="$remotedir/results_$suffix.txt"
 
-echo "Args: ${program_args[@]}" > "$out"
+echo "Args: $@" > "$out"
 cd "$remotedir"
-{ python3 main_eval.py --gpus=8 --gpumem=0.9 --modeldir="$models" --logdir="$logs" \
+{ python3 main_eval.py --gpus=$gpus --gpumem=$gpumem \
+    --modeldir="$models" --logdir="$logs" \
     "$@" || handle_error; } | \
     tee -a "$out"

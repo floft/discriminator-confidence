@@ -3,18 +3,28 @@
 #SBATCH --output=slurm_logs/train_%j.out
 #SBATCH --error=slurm_logs/train_%j.err
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=3
+#SBATCH --cpus-per-task=7
 #SBATCH --nodes=1-1
 #SBATCH --gres=gpu:1
-#SBATCH --partition=taylor,cahnrs_gpu,free_gpu,hpc_club,kamiak
+#SBATCH --partition=taylor
 #SBATCH --time=1-00:00:00
-#SBATCH --mem=20G
+#SBATCH --mem=30G
 
 #
 # This script trains one network
 #
 
 . kamiak_config.sh
+
+# For on my own computer
+remotedir="$localdir"  # for use on my own computer
+# SBATCH --cpus-per-task=7
+# SBATCH --partition=taylor
+# SBATCH --mem=30G
+# For actual use on Kamiak...
+# SBATCH --cpus-per-task=3
+# SBATCH --partition=taylor,cahnrs_gpu,free_gpu,hpc_club,kamiak
+# SBATCH --mem=20G
 
 # Errors
 handle_terminate() {
@@ -67,4 +77,4 @@ pip install --user tensorflow-gpu==2.0.0-alpha0 pillow lxml jupyter matplotlib p
 cd "$remotedir"
 mkdir -p "$logFolder/"
 python3 main.py --logdir "$remotedir/$logFolder" --modeldir "$remotedir/$modelFolder" \
-    --gpumem=0.9 "${program_args[@]}" || handle_error
+    --gpumem=0.8 "${program_args[@]}" || handle_error
