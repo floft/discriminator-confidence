@@ -37,6 +37,7 @@ flags.DEFINE_integer("log_val_steps", 4000, "Log validation information every so
 flags.DEFINE_boolean("use_grl", False, "Use gradient reversal layer for training discriminator for adaptation")
 flags.DEFINE_boolean("use_alt_weight", False, "Use alternate weighting for target classifier")
 flags.DEFINE_boolean("use_domain_confidence", True, "Use domain classifier for confidence instead of task classifier")
+flags.DEFINE_boolean("domain_invariant", True, "Train feature extractor to be domain-invariant")
 flags.DEFINE_boolean("compile_metrics", True, "Compile metrics loop with tf.function for subsequent speed (disable if std::terminate)")
 flags.DEFINE_boolean("test", False, "Use real test set for evaluation rather than validation set")
 flags.DEFINE_boolean("debug", False, "Start new log/model/images rather than continuing from previous run")
@@ -150,13 +151,14 @@ def train_step_gan(data_a, data_b, model, opt, d_opt,
         # labels on source domain
         t_loss = task_loss(task_y_true_a, task_y_pred_a)
 
-        # Update feature extractor to fool discriminator - min_theta step
-        # (swap ones/zeros from correct, update FE rather than D weights)
-        d_loss_fool = domain_loss(domain_y_true_b, domain_y_pred_a) \
-            + domain_loss(domain_y_true_a, domain_y_pred_b)
+        if FLAGS.domain_invariant:
+            # Update feature extractor to fool discriminator - min_theta step
+            # (swap ones/zeros from correct, update FE rather than D weights)
+            d_loss_fool = domain_loss(domain_y_true_b, domain_y_pred_a) \
+                + domain_loss(domain_y_true_a, domain_y_pred_b)
 
-        # Weight by same schedule as GRL to make this more equivalent
-        d_loss_fool *= grl_schedule(global_step)
+            # Weight by same schedule as GRL to make this more equivalent
+            d_loss_fool *= grl_schedule(global_step)
 
         # Update discriminator - min_D step
         # (train D to be correct, update D weights)
@@ -171,14 +173,16 @@ def train_step_gan(data_a, data_b, model, opt, d_opt,
     #d_grad = d_tape.gradient(d_loss_true, model.domain_classifier.trainable_variables)
 
     t_grad = tape.gradient(t_loss, fe_and_task_variables)
-    f_grad = tape.gradient(d_loss_fool, model.feature_extractor.trainable_variables)
+    if FLAGS.domain_invariant:
+        f_grad = tape.gradient(d_loss_fool, model.feature_extractor.trainable_variables)
     d_grad = tape.gradient(d_loss_true, model.domain_classifier.trainable_variables)
     del tape
 
     # Use opt (not d_opt) for updating FE in both cases, so Adam keeps track of
     # the updates to the FE weights
     opt.apply_gradients(zip(t_grad, fe_and_task_variables))
-    opt.apply_gradients(zip(f_grad, model.feature_extractor.trainable_variables))
+    if FLAGS.domain_invariant:
+        opt.apply_gradients(zip(f_grad, model.feature_extractor.trainable_variables))
     d_opt.apply_gradients(zip(d_grad, model.domain_classifier.trainable_variables))
 
     # TODO for inference, use the exponential moving average of the batch norm
