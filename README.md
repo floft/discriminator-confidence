@@ -1,6 +1,6 @@
 # Multi-Purposing Domain Adaptation Discriminators for Pseudo Labeling Confidence
 
-Method: instead of using task classifier's softmax confidence for weighting samples for pseudo labeling, use the discriminator's / domain classifier's confidence based on how source-like the feature representations of the samples appear. In other words, we multi-purpose the discriminator to not only aid in producing domain-invariant representations (like in DANN) but also to provide pseudo labeling confidence.
+Method: instead of using the task classifier's softmax confidence for weighting samples for pseudo labeling, use the discriminator's / domain classifier's confidence based on how source-like the feature representations of the samples appear. In other words, we multi-purpose the discriminator to not only aid in producing domain-invariant representations (like in DANN) but also to provide pseudo labeling confidence.
 
 Steps:
 
