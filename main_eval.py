@@ -249,7 +249,6 @@ def process_model(log_dir, model_dir, source, target, model_name, method_name,
         if target_dataset is not None else None
 
     # Information about domains
-    num_domains = 2  # we'll always assume 2 domains
     num_classes = source_dataset.num_classes
 
     # Build our model
@@ -261,8 +260,8 @@ def process_model(log_dir, model_dir, source, target, model_name, method_name,
         global_step, num_steps)
 
     # Does this method use a target classifier?
-    do_pseudo_labeling = method_name == "pseudo"
-    has_target_classifier = do_pseudo_labeling and FLAGS.target_classifier
+    has_target_classifier = method_name in ["pseudo", "instance"] \
+        and FLAGS.target_classifier
 
     # Load model from checkpoint
     checkpoint = tf.train.Checkpoint(model=model)
