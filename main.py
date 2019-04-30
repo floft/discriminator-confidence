@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Adversarial Confidence for Domain Adaptation Pseudo-Labeling
+Code for:
+Multi-Purposing Domain Adaptation Discriminators for Pseudo Labeling Confidence
 """
 import os
 import time
