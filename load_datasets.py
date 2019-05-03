@@ -35,7 +35,8 @@ FLAGS = flags.FLAGS
 flags.DEFINE_integer("train_batch", 128, "Batch size for training")
 flags.DEFINE_integer("eval_batch", 4096, "Batch size for evaluation")
 flags.DEFINE_integer("shuffle_buffer", 60000, "Dataset shuffle buffer size")
-flags.DEFINE_integer("prefetch_buffer", 1, "Dataset prefetch buffer size")
+flags.DEFINE_integer("prefetch_buffer", 1, "Dataset prefetch buffer size (0 = autotune)")
+flags.DEFINE_boolean("tune_num_parallel_calls", False, "Autotune num_parallel_calls")
 flags.DEFINE_integer("eval_shuffle_seed", 0, "Evaluation shuffle seed for repeatability")
 flags.DEFINE_integer("eval_max_examples", 0, "Max number of examples to evaluate for validation (default 0, i.e. all)")
 flags.DEFINE_boolean("train_on_source_valid", True, "Train on source validation data for small training sets (and in this case, don't draw much from the number)")
@@ -48,7 +49,8 @@ class Dataset:
             train_filenames, test_filenames,
             train_batch=None, eval_batch=None,
             shuffle_buffer=None, prefetch_buffer=None,
-            eval_shuffle_seed=None, eval_max_examples=None):
+            eval_shuffle_seed=None, eval_max_examples=None,
+            tune_num_parallel_calls=None):
         """
         Initialize dataset
 
@@ -71,6 +73,7 @@ class Dataset:
         self.prefetch_buffer = prefetch_buffer
         self.eval_shuffle_seed = eval_shuffle_seed
         self.eval_max_examples = eval_max_examples
+        self.tune_num_parallel_calls = tune_num_parallel_calls
 
         # Set defaults if not specified
         if self.train_batch is None:
@@ -85,6 +88,8 @@ class Dataset:
             self.eval_shuffle_seed = FLAGS.eval_shuffle_seed
         if self.eval_max_examples is None:
             self.eval_max_examples = FLAGS.eval_max_examples
+        if self.tune_num_parallel_calls is None:
+            self.tune_num_parallel_calls = FLAGS.tune_num_parallel_calls
 
         # Load the dataset
         self.train, self.train_evaluation, self.test_evaluation = \
@@ -139,9 +144,19 @@ class Dataset:
         else:  # repeat, shuffle, and batch
             dataset = dataset.apply(tf.data.experimental.shuffle_and_repeat(self.shuffle_buffer))
 
+        # Whether to do autotuning of prefetch or num_parallel_calls
+        prefetch_buffer = self.prefetch_buffer
+        num_parallel_calls = None
+        if self.tune_num_parallel_calls:
+            num_parallel_calls = tf.data.experimental.AUTOTUNE
+        if self.prefetch_buffer == 0:
+            prefetch_buffer = tf.data.experimental.AUTOTUNE
+
         dataset = dataset.apply(tf.data.experimental.map_and_batch(
-            _parse_example_function, batch_size))
-        dataset = dataset.prefetch(self.prefetch_buffer)
+            _parse_example_function, batch_size,
+            num_parallel_calls=num_parallel_calls))
+
+        dataset = dataset.prefetch(prefetch_buffer)
 
         return dataset
 
