@@ -10,7 +10,6 @@ import tensorflow as tf
 from absl import app
 from absl import flags
 from absl import logging
-from tensorflow.python.framework import config as tfconfig
 
 import models
 import load_datasets
@@ -18,6 +17,7 @@ import load_datasets
 from metrics import Metrics
 from checkpoints import CheckpointManager
 from file_utils import last_modified_number, write_finished
+from gpu_memory import set_gpu_memory
 
 FLAGS = flags.FLAGS
 
@@ -31,7 +31,7 @@ flags.DEFINE_integer("steps", 80000, "Number of training steps to run")
 flags.DEFINE_float("lr", 0.001, "Learning rate for training")
 flags.DEFINE_float("lr_domain_mult", 1.0, "Learning rate multiplier for training domain classifier")
 flags.DEFINE_float("lr_target_mult", 0.5, "Learning rate multiplier for training target classifier")
-flags.DEFINE_float("gpumem", 0.3, "Percentage of GPU memory to let TensorFlow use")
+flags.DEFINE_float("gpumem", 0.3, "Percentage of GPU memory to let TensorFlow use (0 == all)")
 flags.DEFINE_integer("model_steps", 4000, "Save the model every so many steps")
 flags.DEFINE_integer("log_train_steps", 500, "Log training information every so many steps")
 flags.DEFINE_integer("log_val_steps", 4000, "Log validation information every so many steps (also saves model)")
@@ -299,10 +299,7 @@ def train_step_target(data_b, weights, model, opt, weighted_task_loss):
 
 def main(argv):
     # Allow running multiple at once
-    # https://www.tensorflow.org/guide/using_gpu#allowing_gpu_memory_growth
-    # https://github.com/tensorflow/tensorflow/issues/25138
-    # Note: GPU options must be set at program startup
-    tfconfig.set_gpu_per_process_memory_fraction(FLAGS.gpumem)
+    set_gpu_memory(FLAGS.gpumem)
 
     # Figure out the log and model directory filenames
     model_dir, log_dir = get_directory_names()
