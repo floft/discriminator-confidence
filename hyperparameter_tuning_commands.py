@@ -4,26 +4,37 @@ Generate a bunch of hyperparameter values that we'll then queue to run
 import math
 
 
-def output_command(batch, lr, balance, units, layers, dropout, test=False):
-    if balance:
-        balance = "--balance"
-        balance_short = "b"
+def output_command(prefix=None, args=None, lr=None, lr_domain=None, lr_target=None, test=False):
+    """
+    lr, lr_domain, lr_target -- tuned parameters
+    prefix -- which tuning we're doing, e.g. usps-mnist-none
+    args -- list of additional arguments, e.g. ["--source=usps",
+        "--target=mnist", "--method=none"]
+    test -- whether to evaluate only last model or best one (not used for tuning)
+    """
+    assert prefix is not None
+    assert args is not None
+    assert lr is not None
+
+    args = " ".join(args)
+
+    if lr_domain is not None:
+        lr_domain_mult = lr_domain/lr
     else:
-        balance = "--nobalance"
-        balance_short = "nb"
+        lr_domain_mult = 1.0
+        lr_domain = 1.0  # just for making string 0 in name, not in tune range
 
-    name = "cv-" \
-        + "b"+str(int(math.log2(batch))) + "-" \
+    if lr_target is not None:
+        lr_target_mult = lr_target/lr
+    else:
+        lr_target_mult = 1.0
+        lr_target = 1.0  # just for making string 0 in name, not in tune range
+
+    name = prefix+"-" \
         + "l"+str(int(-math.log10(lr))) + "-" \
-        + balance_short + "-" \
-        + "u"+str(units) + "-" \
-        + "l"+str(layers) + "-" \
-        + "d"+str(int(dropout*100))
-
-    args = "--dataset=al.zip " \
-        + "--features=al " \
-        + "--units="+str(units) + " " \
-        + "--layers="+str(layers)
+        + "ld"+str(int(-math.log10(lr_domain))) + "-" \
+        + "lt"+str(int(-math.log10(lr_target)))
+    #+ "b"+str(int(math.log2(batch))) + "-" \
 
     # Train on train+valid and evaluate on test
     test_str = " --test" if test else ""
@@ -32,14 +43,15 @@ def output_command(batch, lr, balance, units, layers, dropout, test=False):
     test_eval_str = " --last" if test else ""
 
     train_args = args + " " \
-        + "--model=flat " \
-        + "--batch="+str(batch) + " " \
+        + "--model=vada_small " \
         + "--lr=%.5f "%lr \
-        + balance + " " \
-        + "--dropout=%.2f"%dropout + test_str
+        + "--lr_domain_mult=%.5f "%lr_domain_mult \
+        + "--lr_target_mult=%.5f "%lr_target_mult \
+        + test_str
+    #+ "--train_batch="+str(batch) + " " \
     eval_args = args + test_eval_str
 
-    train = "./kamiak_queue_all_folds.sh " + name + " " + train_args
+    train = "./kamiak_queue.sh " + name + " " + train_args
     evaluate = "sbatch kamiak_eval.srun " + name + " " + eval_args
 
     return name, train, evaluate

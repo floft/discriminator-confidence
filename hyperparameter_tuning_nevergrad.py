@@ -19,7 +19,8 @@ import nevergrad.optimization as optimization
 from datetime import datetime
 from nevergrad import instrumentation as inst
 
-from file_utils import get_num_finished, get_average_valid_accuracy, get_last_int
+from file_utils import get_finished, get_num_finished, get_best_valid_accuracy, \
+    get_best_target_valid_accuracy, get_last_int
 from pickle_data import load_pickle, save_pickle
 from hyperparameter_tuning_commands import output_command
 
@@ -31,15 +32,14 @@ class Network:
     Note: this assumes it's running on the same filesystem as training (and in
     the same directory) since it watches for files in the training log directory.
     """
-    def __init__(self, instrum, params):
-        args, _ = instrum.data_to_arguments(params, deterministic=True)
+    def __init__(self, instrum, params, target_classifier):
         self.instrum = instrum
         self.params = params
-        self.args = args
         self.jobs = []  # slurm job IDs
+        self.target_classifier = target_classifier
 
         # What command we'll run
-        name, train_command, _ = output_command(*args)
+        name, train_command, _ = output_command(*self.params.args, **self.params.kwargs)
         self.name = name
         self.train_command = train_command
 
@@ -47,9 +47,9 @@ class Network:
         # Warning: must be set to the same as in kamiak_config.sh
         self.log_dir = "kamiak-logs-" + name
 
-        # The start script creates 3 separate jobs, so once we have 3 "finished"
-        # files we're done.
-        self.num_folds = 3
+        # The start script creates X separate job(s), so once we have X
+        # "finished" files we're done.
+        self.num_folds = 1
 
     def start(self):
         """ Start the training by submitting to the queue """
@@ -63,11 +63,19 @@ class Network:
 
     def finished(self):
         """ Check if the file saying we're done exists """
-        return get_num_finished(self.log_dir) == self.num_folds
+        if self.num_folds == 1:
+            return get_finished(self.log_dir)
+        else:
+            return get_num_finished(self.log_dir) == self.num_folds
 
     def result(self):
         """ Check the result in the best accuracy file """
-        best_accuracy = get_average_valid_accuracy(self.log_dir)
+        assert self.num_folds == 1, "not yet implemented for averaging folds"
+
+        if self.target_classifier:
+            best_accuracy = get_best_target_valid_accuracy(self.log_dir)
+        else:
+            best_accuracy = get_best_valid_accuracy(self.log_dir)
 
         if best_accuracy is not None:
             # Nevergrad performs minimization, but we want to maximize
@@ -124,34 +132,26 @@ def make_repeatable():
     np.random.seed(1234)
 
 
-def get_summary(instrum, params=None):
-    """ Get human-readable arguments to run with given parameters"""
-    # If None, then do default params
-    if params is None:
-        dim = instrum.dimension
-        params = [0] * dim
-
-    return instrum.get_summary(params)
-
-
-def make_instrumentation(debug=False):
+def make_instrumentation(prefix, args, domain_classifier, target_classifier, debug=False):
     """ Create the possibilities for all of our hyperparameters """
     # Possible argument values
-    batch = inst.var.OrderedDiscrete([2**i for i in range(7, 13)])  # 128 to 4096 by powers of 2
-    lr = inst.var.OrderedDiscrete([10.0**(-i) for i in range(3, 6)])  # 0.001 to 0.00001 by powers of 10
-    balance = inst.var.OrderedDiscrete([True, False])  # boolean
-    units = inst.var.OrderedDiscrete([i*10 for i in range(1, 21)])  # 10 to 200 by 10's
-    layers = inst.var.OrderedDiscrete(list(range(1, 13)))  # 1 to 12
-    dropout = inst.var.OrderedDiscrete([5*i/100 for i in range(0, 11)])  # 0.0 to 0.5 by 0.05's
+    #batch = inst.var.OrderedDiscrete([2**i for i in range(7, 10)])  # 128 to 512 by powers of 2
+    lr = inst.var.OrderedDiscrete([10.0**(-i) for i in range(2, 6)])  # 0.01 to 0.00001 by powers of 10
+    lr_domain = inst.var.OrderedDiscrete([10.0**(-i) for i in range(2, 6)])  # same as above
+    lr_target = inst.var.OrderedDiscrete([10.0**(-i) for i in range(2, 6)])  # same as above
 
     # Our "function" (neural net training with output of max validation accuracy)
     # is a function of the above hyperparameters
-    instrum = inst.Instrumentation(batch, lr, balance, units, layers, dropout)
-
-    if debug:
-        # Make sure defaults are reasonable and in the middle
-        print("Default values")
-        print(get_summary(instrum))
+    if not domain_classifier and not target_classifier:
+        instrum = inst.Instrumentation(lr=lr, prefix=prefix, args=args)
+    elif domain_classifier and not target_classifier:
+        instrum = inst.Instrumentation(lr=lr, lr_domain=lr_domain,
+            prefix=prefix, args=args)
+    elif domain_classifier and target_classifier:
+        instrum = inst.Instrumentation(lr=lr, lr_domain=lr_domain,
+            lr_target=lr_target, prefix=prefix, args=args)
+    else:
+        raise NotImplementedError("unsupported combination of domain/target classifier?")
 
     return instrum
 
@@ -169,22 +169,25 @@ def tell_optim(optim, n, jobs_left):
             file=sys.stderr)
 
 
-def hyperparameter_tuning(tool="PortfolioDiscreteOnePlusOne", budget=600,
-        num_workers=6, pickle_file="nevergrad_optim.pickle"):
+def hyperparameter_tuning(prefix, args, domain_classifier, target_classifier,
+        budget, tool="ScrHammersleySearch", #tool="PortfolioDiscreteOnePlusOne",
+        num_workers=18, pickle_file=None):
     """
     Run hyperparameter tuning
     See: https://github.com/facebookresearch/nevergrad/blob/master/docs/machinelearning.md
 
     Note: num_workers is the number of sets of hyperparameters being tuned at a
-    time, but the total number of jobs running at a time will be num_workers*3
-    since it does 3-fold cross validation.
+    time, but the total number of jobs running at a time.
 
     It is dynamically updated, so probably set it a bit lower than you want it.
     It'll keep increasing it till there is at least one job always pending.
     But, set it to approximately the number you expect since it might be used
     in the optimization algorithm.
     """
-    instrum = make_instrumentation()
+    if pickle_file is None:
+        pickle_file = "nevergrad_optim_"+prefix+".pickle"
+
+    instrum = make_instrumentation(prefix, args, domain_classifier, target_classifier)
 
     # Optimization -- load if it exists, otherwise create it
     # See: https://github.com/facebookresearch/nevergrad/issues/49
@@ -197,7 +200,7 @@ def hyperparameter_tuning(tool="PortfolioDiscreteOnePlusOne", budget=600,
         optim.budget = budget
         optim.num_workers = num_workers
     else:
-        optim = optimization.registry[tool](dimension=instrum.dimension,
+        optim = optimization.registry[tool](instrumentation=instrum,
             budget=budget, num_workers=num_workers)
 
     # How many we've done (will stop after "budget" number of them) and the
@@ -228,7 +231,7 @@ def hyperparameter_tuning(tool="PortfolioDiscreteOnePlusOne", budget=600,
         # If we don't have enough running jobs, start more
         while not time_expired and jobs < budget and len(running) < num_workers:
             # New network to train
-            n = Network(instrum, optim.ask())
+            n = Network(instrum, optim.ask(), target_classifier)
 
             # Skip if already done (tell though), otherwise start it
             if n.finished():
@@ -282,14 +285,12 @@ def hyperparameter_tuning(tool="PortfolioDiscreteOnePlusOne", budget=600,
             n.stop()
 
     # Save present optimizer state and current recommendation
-    recommendation = optim.provide_recommendation()
+    recommendation = optim.recommend()
     save_pickle(pickle_file, (optim, recommendation), overwrite=True)
 
     # Get best recommended parameters
     print("Recommendation")
-    print(get_summary(instrum, recommendation))
-    args, _ = instrum.data_to_arguments(recommendation, deterministic=True)
-    _, train, _ = output_command(*args)
+    _, train, _ = output_command(*recommendation.args, **recommendation.kwargs)
     print("Command:", train)
 
     # We want to exit 1 so we know it's failed to complete
@@ -299,4 +300,19 @@ def hyperparameter_tuning(tool="PortfolioDiscreteOnePlusOne", budget=600,
 
 if __name__ == "__main__":
     make_repeatable()
-    hyperparameter_tuning()
+
+    if len(sys.argv) >= 5:
+        prefix = sys.argv[1]
+        domain_classifier = sys.argv[2] == "domain"
+        target_classifier = sys.argv[3] == "target"
+        budget = int(sys.argv[4])
+        args = sys.argv[5:]
+        print("Prefix:", prefix)
+        print("Domain classifier:", domain_classifier)
+        print("Target classifier:", target_classifier)
+        print("Budget:", budget)
+        print("Other args:", args)
+        hyperparameter_tuning(prefix, args, domain_classifier,
+            target_classifier, budget)
+    else:
+        print("Usage: ./hyperparameter_tuning_nevergrad.py prefix (no)domain (no)target 100 --source=... --target=... <other args>")
