@@ -267,12 +267,13 @@ def hyperparameter_tuning(prefix, args, domain_classifier, target_classifier,
         # pending at a time
         pending = num_pending()
 
-        # Increase till we have some pending
-        if pending == 0:
+        # Increase till we have some pending (used to be == 0, but since Kamiak
+        # is first come first serve, make sure there's a few pending)
+        if pending < 5:
             num_workers += 1
         # Decrease if we have many pending but with the caveat that it takes
         # a bit of time to get them started, so make sure we never go below 1
-        elif pending > 3 and num_workers > 1:
+        elif pending > 10 and num_workers > 1:
             num_workers -= 1
 
         # Try to keep relatively real-time for debugging
