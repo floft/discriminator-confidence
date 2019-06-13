@@ -31,7 +31,7 @@ flags.DEFINE_integer("steps", 80000, "Number of training steps to run")
 flags.DEFINE_float("lr", 0.001, "Learning rate for training")
 flags.DEFINE_float("lr_domain_mult", 1.0, "Learning rate multiplier for training domain classifier")
 flags.DEFINE_float("lr_target_mult", 0.5, "Learning rate multiplier for training target classifier")
-flags.DEFINE_float("gpumem", 0.3, "Percentage of GPU memory to let TensorFlow use (0 == all)")
+flags.DEFINE_float("gpumem", 3350, "GPU memory to let TensorFlow use, in MiB (0 for all)")
 flags.DEFINE_integer("model_steps", 4000, "Save the model every so many steps")
 flags.DEFINE_integer("log_train_steps", 500, "Log training information every so many steps")
 flags.DEFINE_integer("log_val_steps", 4000, "Log validation information every so many steps (also saves model)")
@@ -133,7 +133,7 @@ def train_step_gan(data_a, data_b, model, opt, d_opt,
     Feed through separately so we get different batch normalizations for each
     domain. Also optimize in a GAN-like manner rather than with GRL."""
     x_a, y_a = data_a
-    x_b, y_b = data_b
+    x_b, _ = data_b
 
     # The VADA "replacing gradient reversal" (note D(f(x)) = probability of
     # being target) with non-saturating GAN-style training
